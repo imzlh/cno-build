@@ -1,0 +1,6 @@
+# cno release target<TAB>Debian architecture<TAB>OCI platform<TAB>smoke image
+x86_64	amd64	linux/amd64	debian:bookworm-slim
+i386	i386	linux/386	debian:bookworm-slim
+arm64	arm64	linux/arm64	debian:bookworm-slim
+armv7	armhf	linux/arm/v7	debian:bookworm-slim
+

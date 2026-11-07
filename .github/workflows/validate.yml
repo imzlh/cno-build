@@ -1,0 +1,43 @@
+name: Validate packaging
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install validation tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends jq shellcheck ripgrep python3-yaml
+      - name: Check workflow YAML
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import yaml
+
+          for path in sorted(Path('.github/workflows').glob('*.yml')):
+              with path.open(encoding='utf-8') as stream:
+                  value = yaml.safe_load(stream)
+              if not isinstance(value, dict):
+                  raise SystemExit(f'{path}: workflow must be a mapping')
+              print(f'[yaml] {path}')
+          PY
+      - name: Check GitHub Actions semantics
+        uses: docker://rhysd/actionlint:1.7.7
+      - name: Check scripts and package fixture
+        run: sh scripts/check.sh
+

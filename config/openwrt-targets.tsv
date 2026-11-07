@@ -1,0 +1,6 @@
+# OpenWrt target<TAB>subtarget<TAB>cno release target<TAB>OCI platform
+x86	64	x86_64	linux/amd64
+x86	generic	i386	linux/386
+armsr	armv8	arm64	linux/arm64
+armsr	armv7	armv7	linux/arm/v7
+

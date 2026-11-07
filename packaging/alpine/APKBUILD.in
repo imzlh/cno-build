@@ -1,0 +1,38 @@
+# Maintainer: @MAINTAINER_NAME@ <@MAINTAINER_EMAIL@>
+pkgname=cno
+pkgver=@VERSION@
+pkgrel=@RELEASE@
+pkgdesc="Deno-compatible TypeScript and JavaScript runtime"
+url="@HOMEPAGE@"
+arch="@ARCH@"
+license="MIT"
+depends="ca-certificates"
+# Native dependencies live in /usr/lib/cno/lib and are reached through the
+# upstream RPATH. Alpine's global SONAME tracer cannot model that private tree.
+options="!check !strip !tracedeps"
+source="cno-$pkgver.tar.gz"
+builddir="$srcdir"
+
+package() {
+	install -Dm755 "$builddir/cno" "$pkgdir/usr/lib/cno/cno"
+	install -d "$pkgdir/usr/bin"
+	ln -s ../lib/cno/cno "$pkgdir/usr/bin/cno"
+
+	if [ -d "$builddir/lib" ]; then
+		mkdir -p "$pkgdir/usr/lib/cno/lib"
+		cp -a "$builddir/lib/." "$pkgdir/usr/lib/cno/lib/"
+	fi
+	if [ -d "$builddir/ext" ]; then
+		mkdir -p "$pkgdir/usr/lib/cno/ext"
+		cp -a "$builddir/ext/." "$pkgdir/usr/lib/cno/ext/"
+	fi
+	if [ -f "$builddir/BUILD-INFO.txt" ]; then
+		install -Dm644 "$builddir/BUILD-INFO.txt" \
+			"$pkgdir/usr/share/doc/cno/BUILD-INFO.txt"
+	fi
+	install -Dm644 "$startdir/LICENSE" \
+		"$pkgdir/usr/share/licenses/cno/LICENSE"
+}
+
+sha512sums="@SHA512@  cno-$pkgver.tar.gz"
+

@@ -1,0 +1,329 @@
+name: Build system packages
+
+on:
+  workflow_dispatch:
+    inputs:
+      cno_release:
+        description: cno release tag/version, or latest
+        type: string
+        default: latest
+        required: true
+      publish:
+        description: Publish the package set as a GitHub Release
+        type: boolean
+        default: true
+  repository_dispatch:
+    types: [cno-release]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: packages-${{ github.event.client_payload.tag || inputs.cno_release || 'latest' }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+      source_date_epoch: ${{ steps.release.outputs.source_date_epoch }}
+      openwrt_ipk_release: ${{ steps.openwrt.outputs.release }}
+      package_release: ${{ steps.package.outputs.release }}
+      debian_matrix: ${{ steps.matrix.outputs.debian }}
+      alpine_matrix: ${{ steps.matrix.outputs.alpine }}
+      openwrt_matrix: ${{ steps.matrix.outputs.openwrt }}
+      publish: ${{ steps.mode.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: release
+        name: Resolve immutable cno release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          REQUESTED_RELEASE: ${{ github.event.client_payload.tag || inputs.cno_release || 'latest' }}
+        run: |
+          sh scripts/resolve-cno-release.sh "$REQUESTED_RELEASE" > release.outputs
+          cat release.outputs
+          cat release.outputs >> "$GITHUB_OUTPUT"
+      - id: openwrt
+        name: Resolve latest OpenWrt IPK patch release
+        run: echo "release=$(sh scripts/resolve-openwrt-release.sh)" >> "$GITHUB_OUTPUT"
+      - id: package
+        name: Read package revision
+        run: |
+          . config/project.env
+          echo "release=$CNO_PACKAGE_RELEASE" >> "$GITHUB_OUTPUT"
+      - id: matrix
+        name: Generate package matrices from configuration
+        run: |
+          echo "debian=$(sh scripts/config-matrix.sh debian)" >> "$GITHUB_OUTPUT"
+          echo "alpine=$(sh scripts/config-matrix.sh alpine)" >> "$GITHUB_OUTPUT"
+          echo "openwrt=$(sh scripts/config-matrix.sh openwrt)" >> "$GITHUB_OUTPUT"
+      - id: mode
+        name: Resolve publication mode
+        env:
+          DISPATCH_PUBLISH: ${{ github.event.client_payload.publish }}
+          MANUAL_PUBLISH: ${{ inputs.publish }}
+        run: |
+          if [ "${{ github.event_name }}" = repository_dispatch ]; then
+            case "$DISPATCH_PUBLISH" in false) publish=false ;; *) publish=true ;; esac
+          else
+            publish=${MANUAL_PUBLISH:-false}
+          fi
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+
+  deb:
+    name: DEB ${{ matrix.deb_arch }}
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.prepare.outputs.debian_matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download and verify upstream archive
+        run: |
+          sh scripts/fetch-cno-asset.sh '${{ needs.prepare.outputs.tag }}' \
+            'cno-linux-minimal-${{ matrix.cno_target }}.tar.gz' \
+            'downloads/cno-linux-minimal-${{ matrix.cno_target }}.tar.gz'
+      - name: Build Debian package
+        run: |
+          sh scripts/build-deb.sh '${{ needs.prepare.outputs.version }}' \
+            '${{ matrix.deb_arch }}' \
+            'downloads/cno-linux-minimal-${{ matrix.cno_target }}.tar.gz' \
+            'dist/deb/${{ matrix.deb_arch }}' \
+            '${{ needs.prepare.outputs.source_date_epoch }}'
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm,arm64,386
+      - name: Install, execute and purge in clean Debian
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          IMAGE: ${{ matrix.image }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          DEB_ARCH: ${{ matrix.deb_arch }}
+          PACKAGE_RELEASE: ${{ needs.prepare.outputs.package_release }}
+        run: |
+          docker run --rm --platform "$PLATFORM" \
+            -e VERSION -e DEB_ARCH -v "$GITHUB_WORKSPACE:/work:ro" "$IMAGE" \
+            sh /work/scripts/smoke-deb.sh \
+              "/work/dist/deb/$DEB_ARCH/cno_${VERSION}-${PACKAGE_RELEASE}_${DEB_ARCH}.deb" "$VERSION"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages-deb-${{ matrix.deb_arch }}
+          path: dist/deb/${{ matrix.deb_arch }}/*.deb
+          if-no-files-found: error
+
+  alpine:
+    name: Alpine APK ${{ matrix.alpine_arch }}
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.prepare.outputs.alpine_matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: all
+      - name: Download and verify upstream archive
+        run: |
+          sh scripts/fetch-cno-asset.sh '${{ needs.prepare.outputs.tag }}' \
+            'cno-linux-musl-dynamic-${{ matrix.cno_target }}.tar.gz' \
+            'downloads/cno-linux-musl-dynamic-${{ matrix.cno_target }}.tar.gz'
+      - name: Build signed Alpine package on target architecture
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          EPOCH: ${{ needs.prepare.outputs.source_date_epoch }}
+          ALPINE_ARCH: ${{ matrix.alpine_arch }}
+          CNO_TARGET: ${{ matrix.cno_target }}
+          ALPINE_SIGNING_KEY_BASE64: ${{ secrets.ALPINE_SIGNING_KEY_BASE64 }}
+        run: |
+          mkdir -p work/alpine "dist/alpine/$ALPINE_ARCH"
+          chmod 0777 work/alpine "dist/alpine/$ALPINE_ARCH"
+          if [ -n "$ALPINE_SIGNING_KEY_BASE64" ]; then
+            printf '%s' "$ALPINE_SIGNING_KEY_BASE64" \
+              | base64 --decode > work/alpine/release-signing.rsa
+            chmod 0600 work/alpine/release-signing.rsa
+          fi
+          docker run --rm --platform "$PLATFORM" \
+            -e VERSION -e EPOCH -e ALPINE_ARCH -e CNO_TARGET \
+            -v "$GITHUB_WORKSPACE:/work" -w /work alpine:3.21 sh -eux -c '
+              apk add --no-cache alpine-sdk openssl coreutils
+              adduser -D builder
+              addgroup builder abuild
+              chown -R builder:builder /work/work/alpine "/work/dist/alpine/$ALPINE_ARCH"
+              signing_key=
+              if [ -f /work/work/alpine/release-signing.rsa ]; then
+                mkdir -p /home/builder/.abuild
+                cp /work/work/alpine/release-signing.rsa /home/builder/.abuild/release.rsa
+                chown -R builder:builder /home/builder/.abuild
+                chmod 0600 /home/builder/.abuild/release.rsa
+                signing_key=ABUILD_PRIVATE_KEY=/home/builder/.abuild/release.rsa
+              fi
+              su - builder -c "$signing_key RUNNER_TEMP=/work/work/alpine \
+                sh /work/scripts/build-alpine.sh $VERSION $ALPINE_ARCH \
+                /work/downloads/cno-linux-musl-dynamic-$CNO_TARGET.tar.gz \
+                /work/dist/alpine/$ALPINE_ARCH $EPOCH"
+            '
+      - name: Install, execute and uninstall in clean Alpine
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          ALPINE_ARCH: ${{ matrix.alpine_arch }}
+          PACKAGE_RELEASE: ${{ needs.prepare.outputs.package_release }}
+        run: |
+          key=$(find "dist/alpine/$ALPINE_ARCH/keys" -type f -name '*.rsa.pub' -print -quit)
+          test -n "$key"
+          docker run --rm --platform "$PLATFORM" \
+            -e VERSION -e ALPINE_ARCH -v "$GITHUB_WORKSPACE:/work:ro" alpine:3.21 \
+            sh /work/scripts/smoke-alpine.sh \
+              "/work/dist/alpine/$ALPINE_ARCH/cno-${VERSION}-r${PACKAGE_RELEASE}-${ALPINE_ARCH}.apk" \
+              "/work/$key" "$VERSION"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages-alpine-${{ matrix.alpine_arch }}
+          path: |
+            dist/alpine/${{ matrix.alpine_arch }}/*.apk
+            dist/alpine/${{ matrix.alpine_arch }}/keys/*.rsa.pub
+          if-no-files-found: error
+
+  deb-ubuntu:
+    name: Ubuntu DEB ${{ matrix.deb_arch }}
+    needs: [prepare, deb]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {deb_arch: amd64, platform: linux/amd64}
+          - {deb_arch: arm64, platform: linux/arm64}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: packages-deb-${{ matrix.deb_arch }}
+          path: dist/deb/${{ matrix.deb_arch }}
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+      - name: Install, execute and purge in clean Ubuntu
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          DEB_ARCH: ${{ matrix.deb_arch }}
+          PACKAGE_RELEASE: ${{ needs.prepare.outputs.package_release }}
+        run: |
+          docker run --rm --platform "$PLATFORM" \
+            -e VERSION -e DEB_ARCH -v "$GITHUB_WORKSPACE:/work:ro" ubuntu:24.04 \
+            sh /work/scripts/smoke-deb.sh \
+              "/work/dist/deb/$DEB_ARCH/cno_${VERSION}-${PACKAGE_RELEASE}_${DEB_ARCH}.deb" "$VERSION"
+
+  openwrt:
+    name: OpenWrt ${{ matrix.format }} ${{ matrix.target }}/${{ matrix.subtarget }}
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.prepare.outputs.openwrt_matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm,arm64,386
+      - name: Install OpenWrt SDK host tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang flex bison g++ gawk gcc-multilib gettext git \
+            libncurses-dev libssl-dev python3 python3-setuptools rsync swig \
+            unzip zlib1g-dev file wget zstd
+      - name: Download and verify static upstream archive
+        run: |
+          sh scripts/fetch-cno-asset.sh '${{ needs.prepare.outputs.tag }}' \
+            'cno-linux-musl-${{ matrix.cno_target }}.tar.gz' \
+            'downloads/cno-linux-musl-${{ matrix.cno_target }}.tar.gz'
+      - name: Build with the official OpenWrt SDK
+        env:
+          FORMAT: ${{ matrix.format }}
+          STABLE_RELEASE: ${{ needs.prepare.outputs.openwrt_ipk_release }}
+          TARGET: ${{ matrix.target }}
+          SUBTARGET: ${{ matrix.subtarget }}
+          CNO_TARGET: ${{ matrix.cno_target }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          if [ "$FORMAT" = ipk ]; then release=$STABLE_RELEASE; else release=snapshots; fi
+          sh scripts/build-openwrt.sh "$FORMAT" "$release" "$TARGET" "$SUBTARGET" \
+            "$CNO_TARGET" "$VERSION" "downloads/cno-linux-musl-$CNO_TARGET.tar.gz" \
+            "dist/openwrt/$FORMAT/$TARGET-$SUBTARGET"
+      - name: Execute OpenWrt-staged binary on target CPU
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          FORMAT: ${{ matrix.format }}
+          TARGET: ${{ matrix.target }}
+          SUBTARGET: ${{ matrix.subtarget }}
+        run: |
+          runtime=$(find "dist/openwrt/$FORMAT/$TARGET-$SUBTARGET" -type f -name '*.runtime' -print -quit)
+          test -n "$runtime"
+          docker run --rm --platform "$PLATFORM" \
+            -e VERSION -v "$GITHUB_WORKSPACE:/work:ro" alpine:3.21 \
+            sh /work/scripts/smoke-static-binary.sh "/work/$runtime" "$VERSION"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages-openwrt-${{ matrix.format }}-${{ matrix.target }}-${{ matrix.subtarget }}
+          path: |
+            dist/openwrt/${{ matrix.format }}/${{ matrix.target }}-${{ matrix.subtarget }}/*.${{ matrix.format }}
+            dist/openwrt/${{ matrix.format }}/${{ matrix.target }}-${{ matrix.subtarget }}/*.buildinfo
+          if-no-files-found: error
+
+  release:
+    name: Assemble and publish
+    needs: [prepare, deb, deb-ubuntu, alpine, openwrt]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: incoming
+          pattern: packages-*
+      - name: Assemble checksummed package set
+        run: |
+          sh scripts/collect-release.sh incoming release '${{ needs.prepare.outputs.version }}'
+          find release -maxdepth 1 -type f -printf '%f\n' | sort
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cno-system-packages-${{ needs.prepare.outputs.version }}-r${{ needs.prepare.outputs.package_release }}
+          path: release/
+          if-no-files-found: error
+      - name: Publish GitHub Release
+        if: needs.prepare.outputs.publish == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: packages-v${{ needs.prepare.outputs.version }}-r${{ needs.prepare.outputs.package_release }}
+          name: cno ${{ needs.prepare.outputs.version }} system packages (r${{ needs.prepare.outputs.package_release }})
+          target_commitish: ${{ github.sha }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            release/*.deb
+            release/*.ipk
+            release/*.apk
+            release/*.rsa.pub
+            release/*.buildinfo
+            release/SHA256SUMS.txt
+            release/RELEASE-INFO.txt
+

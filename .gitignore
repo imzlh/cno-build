@@ -1,0 +1,13 @@
+/dist/
+/downloads/
+/work/
+/.cache/
+/.tmp/
+*.deb
+*.ipk
+*.apk
+*.tar.zst
+*.tar.xz
+*.rsa
+*.rsa.pub
+
