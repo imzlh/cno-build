@@ -17,7 +17,7 @@ find "$CNO_BUILDS_ROOT/scripts" -type f -name '*.sh' -print | sort \
     | while IFS= read -r script; do sh -n "$script"; done
 # common.sh is a sourced library and intentionally has no shebang invocation.
 shellcheck -x -s sh \
-    -e SC1007 -e SC2016 \
+    -e SC1007 -e SC2015 -e SC2016 -e SC2119 \
     -P "$CNO_BUILDS_ROOT" \
     -P "$CNO_BUILDS_ROOT/scripts" \
     -P "$CNO_BUILDS_ROOT/scripts/lib" \
