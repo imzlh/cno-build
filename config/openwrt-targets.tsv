@@ -4,8 +4,8 @@
 ipk+apk	x86	64	x86_64	x86-64	little	none	x86_64-unknown-linux-musl	x86-64	default	qemu-x86_64	X86_64	ON	Advanced Micro Devices X86-64
 ipk+apk	x86	generic	i386_pentium4	pentium4	little	none	i586-unknown-linux-musl	pentium4	default	qemu-i386	X86_32	ON	Intel 80386
 ipk+apk	armsr	armv8	aarch64_generic	generic-armv8	little	none	aarch64-unknown-linux-musl	generic	default	qemu-aarch64	AARCH64	ON	AArch64
-ipk+apk	bcm27xx	bcm2710	aarch64_cortex-a53	cortex-a53	little	none	aarch64-unknown-linux-musl	cortex-a53	default	qemu-aarch64	AARCH64	ON	AArch64
-ipk+apk	bcm27xx	bcm2711	aarch64_cortex-a72	cortex-a72	little	none	aarch64-unknown-linux-musl	cortex-a72	default	qemu-aarch64	AARCH64	ON	AArch64
+ipk+apk	bcm27xx	bcm2710	aarch64_cortex-a53	cortex-a53	little	none	aarch64-unknown-linux-musl	cortex-a53	aarch64-no-crypto	qemu-aarch64	AARCH64	ON	AArch64
+ipk+apk	bcm27xx	bcm2711	aarch64_cortex-a72	cortex-a72	little	none	aarch64-unknown-linux-musl	cortex-a72	aarch64-no-crypto	qemu-aarch64	AARCH64	ON	AArch64
 ipk+apk	at91	sama5	arm_cortex-a5_vfpv4	cortex-a5	little	hard	armv7-unknown-linux-musleabihf	cortex-a5	arm-hard-d16	qemu-arm	ARMV7_VFP	ON	ARM
 ipk+apk	mediatek	mt7629	arm_cortex-a7	cortex-a7	little	soft	armv7-unknown-linux-musleabi	cortex-a7	arm-soft-nofp	qemu-arm	ARMV7	ON	ARM
 ipk+apk	sunxi	cortexa7	arm_cortex-a7_neon-vfpv4	cortex-a7-neon-vfpv4	little	hard	armv7-unknown-linux-musleabihf	cortex-a7	arm-hard-neon	qemu-arm	ARMV7A_VFP	ON	ARM

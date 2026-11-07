@@ -5,7 +5,7 @@ usage() {
     printf '%s\n' \
         'Usage: verify-openwrt-elf.sh SDK EXPECTED_ARCH_PACKAGES ENDIAN MACHINE_REGEX FLOAT_ABI RUST_TARGET RUST_FEATURES CNO OXC' \
         '  ENDIAN: little|big; FLOAT_ABI: hard|soft|none' \
-        '  RUST_FEATURES: default|arm-soft-nofp|arm-hard-d16|arm-hard-neon' >&2
+        '  RUST_FEATURES: default|aarch64-no-crypto|arm-soft-nofp|arm-hard-d16|arm-hard-neon' >&2
     exit 2
 }
 
@@ -22,7 +22,7 @@ oxc=$9
 case $endian in little|big) ;; *) usage ;; esac
 case $float_abi in hard|soft|none) ;; *) usage ;; esac
 case $rust_features in
-    default|arm-soft-nofp|arm-hard-d16|arm-hard-neon) ;;
+    default|aarch64-no-crypto|arm-soft-nofp|arm-hard-d16|arm-hard-neon) ;;
     *) usage ;;
 esac
 case $rust_target in
@@ -132,6 +132,7 @@ verify_arm_features() {
     attributes=$($readelf_command -AW "$file")
     case $rust_features in
         default) return 0 ;;
+        aarch64-no-crypto) return 0 ;;
         arm-soft-nofp)
             if printf '%s\n' "$attributes" | grep -Eq \
                 'Tag_(Advanced_SIMD_arch|FP_arch):'; then
@@ -163,14 +164,16 @@ verify_arm_features() {
             ;;
     esac
 }
-if [ "$rust_features" != default ]; then
+case $rust_features in
+arm-*)
     printf '%s\n' "$cno_identity" | grep -q '^Machine: ARM$' || {
         printf 'ARM Rust feature profile used for a non-ARM ELF: %s\n' "$rust_features" >&2
         exit 1
     }
     verify_arm_features "$cno"
     verify_arm_features "$oxc"
-fi
+    ;;
+esac
 
 if printf '%s\n' "$cno_identity" | grep -q '^Machine: MIPS'; then
     for identity in "$cno_identity" "$oxc_identity"; do

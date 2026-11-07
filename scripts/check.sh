@@ -75,6 +75,7 @@ printf '%s' "$openwrt_matrix" | jq -e \
         has("subtarget") and has("expected_arch") and has("cpu_tune") and
         has("rust_target") and has("rust_cpu") and has("emulator") and
         (.rust_features == "default" or
+         .rust_features == "aarch64-no-crypto" or
          .rust_features == "arm-soft-nofp" or
          .rust_features == "arm-hard-d16" or
          .rust_features == "arm-hard-neon") and
@@ -96,7 +97,9 @@ printf '%s' "$openwrt_matrix" | jq -r '.[] | "\(.rust_target)\t\(.rust_cpu)"' \
 # explicit so an edit cannot accidentally re-enable ARM FPU instructions.
 printf '%s' "$openwrt_matrix" | jq -e '
     all(.[];
-        if .rust_features == "arm-soft-nofp" then
+        if .rust_features == "aarch64-no-crypto" then
+            .rust_target == "aarch64-unknown-linux-musl" and .float_abi == "none"
+        elif .rust_features == "arm-soft-nofp" then
             (.rust_target | test("^arm.*-musleabi$")) and .float_abi == "soft"
         elif (.rust_features == "arm-hard-d16" or .rust_features == "arm-hard-neon") then
             (.rust_target | test("^arm.*-musleabihf$")) and .float_abi == "hard"

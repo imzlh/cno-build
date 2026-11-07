@@ -57,11 +57,13 @@ Before building, compare `expected_arch_packages` with the SDK's actual
 provenance. The matrix key is `format + release + target + subtarget`, not the
 package architecture.
 
-`rust_features` is one of `default`, `arm-soft-nofp`, `arm-hard-d16`, or
-`arm-hard-neon`. It is a controlled profile rather than arbitrary Rust flags:
-the soft/no-FP profile disables FP registers and NEON, the D16 profile disables
-D32 and NEON, and the NEON profile enables Advanced SIMD. The final ELF
-attributes must prove the selected profile for both cno and OXC.
+`rust_features` is one of `default`, `aarch64-no-crypto`, `arm-soft-nofp`,
+`arm-hard-d16`, or `arm-hard-neon`. It is a controlled profile rather than
+arbitrary Rust flags: the AArch64 profile retains A53/A72 scheduling while
+disabling optional AES/SHA2 instructions, the soft/no-FP profile disables FP
+registers and NEON, the D16 profile disables D32 and NEON, and the NEON profile
+enables Advanced SIMD. The final ELF attributes must prove each ARM profile
+for both cno and OXC.
 
 For MIPS32 OpenWrt soft-float rows use `mips-unknown-linux-musl` or
 `mipsel-unknown-linux-musl`, build Rust `std` with nightly, and set WAMR off

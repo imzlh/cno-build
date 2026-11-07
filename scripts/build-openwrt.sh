@@ -43,7 +43,7 @@ case $release in snapshots) [ "$format" = apk ] || die 'snapshots must use apk' 
 case $endian in little|big) ;; *) die "invalid endian value: $endian" ;; esac
 case $float_abi in hard|soft|none) ;; *) die "invalid float ABI: $float_abi" ;; esac
 case $rust_features in
-    default|arm-soft-nofp|arm-hard-d16|arm-hard-neon) ;;
+    default|aarch64-no-crypto|arm-soft-nofp|arm-hard-d16|arm-hard-neon) ;;
     *) die "invalid Rust feature profile: $rust_features" ;;
 esac
 case $wasm in ON|OFF) ;; *) die "invalid WASM value: $wasm" ;; esac

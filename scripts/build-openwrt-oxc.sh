@@ -4,7 +4,7 @@ set -eu
 usage() {
     printf '%s\n' \
         'Usage: build-openwrt-oxc.sh SOURCE_DIR RUST_TARGET RUST_CPU RUST_FEATURES FLOAT_ABI OUTPUT_DIR' \
-        '  RUST_FEATURES: default|arm-soft-nofp|arm-hard-d16|arm-hard-neon' \
+        '  RUST_FEATURES: default|aarch64-no-crypto|arm-soft-nofp|arm-hard-d16|arm-hard-neon' \
         '  FLOAT_ABI: hard|soft|none' >&2
     exit 2
 }
@@ -35,7 +35,7 @@ grep -Fq 'oxc_sourcemap = { path = "scripts/ci/oxc/vendor/oxc_sourcemap" }' \
 case $rust_target in *[!0-9A-Za-z_.-]*|'') printf 'invalid Rust target: %s\n' "$rust_target" >&2; exit 2 ;; esac
 case $rust_cpu in *[!0-9A-Za-z_.+-]*|'') printf 'invalid Rust CPU: %s\n' "$rust_cpu" >&2; exit 2 ;; esac
 case $rust_features in
-    default|arm-soft-nofp|arm-hard-d16|arm-hard-neon) ;;
+    default|aarch64-no-crypto|arm-soft-nofp|arm-hard-d16|arm-hard-neon) ;;
     *) usage ;;
 esac
 case $float_abi in hard|soft|none) ;; *) usage ;; esac
@@ -55,6 +55,7 @@ case $rust_target/$float_abi in
 esac
 case $rust_features:$rust_target:$float_abi in
     default:*) ;;
+    aarch64-no-crypto:aarch64-unknown-linux-musl:none) ;;
     arm-soft-nofp:arm*-musleabi:soft) ;;
     arm-hard-d16:arm*-musleabihf:hard) ;;
     arm-hard-neon:arm*-musleabihf:hard) ;;
@@ -152,6 +153,12 @@ fi
 # non-FPU boards stay integer-only and D16 boards never use d16-d31/NEON.
 case $rust_features in
     default) ;;
+    aarch64-no-crypto)
+        # Cortex-A53/A72 select optional ARMv8 crypto extensions in LLVM even
+        # though common BCM2710/BCM2711 CPUs do not implement AES or SHA2.
+        # Keep core-specific scheduling and CRC while excluding those opcodes.
+        target_features="$target_features,-aes,-sha2"
+        ;;
     arm-soft-nofp)
         target_features="$target_features,+soft-float,-neon,-fpregs"
         ;;
