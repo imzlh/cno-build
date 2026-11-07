@@ -278,7 +278,20 @@ jobs:
           CNO_RUN_TESTS: 'false'
           CNO_STATIC_LINK: 'false'
           CMAKE_BUILD_PARALLEL_LEVEL: '4'
-        run: bash scripts/ci/linux/cross.sh riscv64
+        run: |
+          set +e
+          bash scripts/ci/linux/cross.sh riscv64 2>&1 | tee "$RUNNER_TEMP/riscv64-build.log"
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -ne 0 ]; then
+            {
+              echo '::group::RISC-V build failure tail'
+              tail -n 200 "$RUNNER_TEMP/riscv64-build.log"
+              echo '::endgroup::'
+              echo '::error title=RISC-V cross build failed::Last 200 log lines are printed above.'
+            } >&2
+            exit "$status"
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: cno-linux-musl-dynamic-riscv64-${{ needs.prepare.outputs.commit }}
@@ -486,8 +499,11 @@ jobs:
           SOURCE_COMMIT: ${{ needs.prepare.outputs.commit }}
           CNO_OXC_RUST_NIGHTLY: nightly-2026-10-15
           CNO_OXC_RUST_TOOLCHAIN: 1.95.0
+        shell: bash
         run: |
           if [ "$FORMAT" = ipk ]; then release=$STABLE_RELEASE; else release=snapshots; fi
+          log="$RUNNER_TEMP/openwrt-$FORMAT-$TARGET-$SUBTARGET.log"
+          set +e
           sh scripts/build-openwrt.sh "$FORMAT" "$release" "$TARGET" "$SUBTARGET" \
             "$EXPECTED_ARCH" "$CPU_TUNE" "$ENDIAN" "$FLOAT_ABI" \
             "$RUST_TARGET" "$RUST_CPU" "$RUST_FEATURES" \
@@ -495,7 +511,18 @@ jobs:
             "$MACHINE_REGEX" "$VERSION" "$SOURCE_COMMIT" \
             "work/cno-source/cno-source-$VERSION.tar.gz" \
             "work/cno-source/cno-cli-$VERSION.min.js" \
-            "dist/openwrt/$FORMAT/$TARGET-$SUBTARGET"
+            "dist/openwrt/$FORMAT/$TARGET-$SUBTARGET" 2>&1 | tee "$log"
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -ne 0 ]; then
+            {
+              echo "::group::OpenWrt $FORMAT $TARGET/$SUBTARGET failure tail"
+              tail -n 200 "$log"
+              echo '::endgroup::'
+              echo "::error title=OpenWrt $FORMAT $TARGET/$SUBTARGET failed::Last 200 log lines are printed above."
+            } >&2
+            exit "$status"
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: packages-openwrt-${{ matrix.format }}-${{ matrix.target }}-${{ matrix.subtarget }}
