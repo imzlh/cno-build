@@ -1,55 +1,103 @@
 # cno system packages
 
-This repository turns published
-[`cno-cli`](https://github.com/imzlh/cno-cli) Linux archives into packages that
-install and uninstall through the operating system's native package manager.
-It does not build cno source code again and does not track moving branches: each
-job resolves one published `vMAJOR.MINOR.PATCH` release, downloads its immutable
-assets, and verifies them against that release's `SHA256SUMS.txt` before any
-package is made.
+This repository builds native system packages for published
+[`cno-cli`](https://github.com/imzlh/cno-cli) releases. Debian/Ubuntu and
+Alpine packages wrap the release archives that match those systems. OpenWrt is
+different: every target/subtarget is cross-compiled from the immutable release
+source by its own official SDK.
+
+The workflow resolves a `vMAJOR.MINOR.PATCH` tag to a full commit, verifies all
+downloaded assets, and never follows a moving source branch. It does not modify
+`../cno-cli`, initialize a new repository, or create commits.
 
 ## Package set
 
-| System | Format | Architectures | Upstream archive |
-| --- | --- | --- | --- |
-| Debian 12 / Ubuntu 24.04+ | `.deb` | amd64, i386, arm64, armhf | `glibc-minimal` |
-| Alpine 3.21+ | `.apk` | x86_64, x86, aarch64, armv7, armhf, riscv64 | `musl-dynamic` |
-| OpenWrt 24.10.x | `.ipk` | x86_64, x86, arm64, armv7 | static musl |
-| OpenWrt snapshots | `.apk` | x86_64, x86, arm64, armv7 | static musl |
+| System | Format | Build input |
+| --- | --- | --- |
+| Debian 12 / Ubuntu 24.04+ | `.deb` | published `glibc-minimal` archive |
+| Alpine 3.21+ | `.apk` | published `musl-dynamic` archive |
+| OpenWrt 24.10.x | `.ipk` | release source + the selected official SDK |
+| OpenWrt snapshots | `.apk` | release source + the selected official SDK |
 
-The Debian/Ubuntu and Alpine packages keep the upstream directory layout under
-`/usr/lib/cno`: the runtime, its private shared libraries, and `ext/oxc.so` stay
-together. `/usr/bin/cno` is a relative symlink. This lets the runtime discover
-OXC automatically and preserves the upstream relative RPATHs.
+Debian architectures are amd64, i386, arm64, and armhf. Alpine architectures
+are x86_64, x86, aarch64, armv7, armhf, and riscv64.
 
-OpenWrt packages contain only the fully static runtime. Native dynamic modules
-are intentionally omitted because static musl executables cannot load them;
-TypeScript transformation uses cno's bundled Sucrase path instead. Building in
-the official OpenWrt SDK gives each package the exact metadata and container
-format expected by that OpenWrt release.
+OpenWrt coverage is organized by SDK target/subtarget, not by a generic release
+architecture. The initial matrix includes x86-64, Pentium 4, generic AArch64,
+Cortex-A53, Cortex-A72, Cortex-A5, Cortex-A7 soft- and hard-float, Cortex-A9
+soft- and hard-float, Cortex-A15, ARM1176/ARMv6, ARM926/ARMv5, XScale/ARMv5,
+MIPS 24Kc in both byte orders, MIPS 74Kc, MIPS 1004Kc, and RV64GC. Each row is
+built twice where available: once for OpenWrt 24.10 IPK and once for the current
+snapshot APK format.
+
+The exact rows and their expected SDK metadata live in
+[`config/openwrt-targets.tsv`](config/openwrt-targets.tsv). A row is never
+deduplicated by `ARCH_PACKAGES`: for example, `ramips/mt7621` can carry a 24Kc
+package label while its SDK actually tunes C code for 1004Kc.
+
+## OpenWrt build model
+
+One host job prepares a reproducible archive containing the release commit and
+all recursive submodules, plus the generated JavaScript bundle. Every OpenWrt
+matrix job then independently:
+
+1. downloads and checksums the official SDK for that target/subtarget;
+2. verifies the SDK's actual package architecture against the matrix;
+3. compiles cno, QuickJS, libuv, and WAMR (when enabled) with the SDK compiler,
+   sysroot, CPU flags, endianness, and floating-point ABI;
+4. builds the OXC Rust core for the same ISA/ABI and links its C binding with
+   that SDK's compiler;
+5. runs the target `cjsc` through QEMU so embedded bytecode has the target byte
+   order, including regenerated QuickJS builtins on big-endian MIPS;
+6. packages a dynamic OpenWrt-musl runtime using OpenWrt system libraries;
+7. validates ELF class, machine, endianness, float ABI, loader, dependencies,
+   exports, RPATH/TEXTREL policy, and executes a TypeScript/OXC smoke test under
+   QEMU.
+
+ARMv7 OXC builds also use a named Rust feature profile from the matrix. Soft
+float Cortex-A7/A9 rows disable FP registers and NEON entirely; Cortex-A5 and
+the VFPv3-D16 Cortex-A9 row disable D32 and NEON; NEON/VFPv4 Cortex-A7/A15
+rows explicitly enable NEON. The resulting ARM ELF attributes are checked on
+both the runtime and `oxc.so`, so selecting a CPU cannot silently introduce
+instructions absent from that OpenWrt subtype.
+
+ARMv5, ARMv6, and MIPS32 OpenWrt rows disable WAMR in the first version until
+its native-call ABI is proven, while the cno core and OXC remain enabled.
+MIPS32 OpenWrt rows are soft-float. LLVM does not expose the OpenWrt marketing
+CPU names 24Kc, 74Kc, and 1004Kc; the Rust half of OXC therefore uses the
+matching MIPS32 ISA/soft-float baseline,
+while the C binding and complete cno runtime still receive the exact SDK flags.
+This distinction is recorded in each `.buildinfo` file.
+
+MIPS 4KEc, MIPS 24Kf hard-float, MIPS64, PowerPC/SPE, ARC, and LoongArch are not
+claimed yet. They need Rust target or ABI work and a real SDK/QEMU validation;
+publishing a package that merely has the right filename but can raise an illegal
+instruction would be worse than leaving the row out.
+
+The expected OpenWrt package architecture and dependency names are checked
+fail-closed. They are high-confidence inputs, but the first live workflow run is
+also the authoritative test against the current 24.10 and snapshot SDKs. A
+target rename, feed package rename, or `cmake.mk` interface change may need a
+small follow-up based on that run's log.
 
 ## Run the workflow
 
-After initializing and pushing this repository, open **Actions → Build system
-packages → Run workflow**. `cno_release` accepts `latest`, `v1.1.0`, or `1.1.0`.
-Set `publish` to false for an artifact-only trial run.
+After pushing this repository, open **Actions → Build system packages → Run
+workflow**. `cno_release` accepts `latest`, `v1.1.0`, or `1.1.0`. Set `publish`
+to false for an artifact-only trial run.
 
-For durable Alpine releases, add a repository Actions secret named
-`ALPINE_SIGNING_KEY_BASE64` containing a base64-encoded RSA private key. The
-workflow uses that key for every Alpine architecture and publishes its public
-key. If the secret is absent, each architecture gets a temporary signing key;
-that is convenient for trial runs but does not provide a stable trust root
-between releases. Generate a suitable secret locally with:
+For durable Alpine releases, add an Actions secret named
+`ALPINE_SIGNING_KEY_BASE64` containing a base64-encoded RSA private key. Without
+it, trial jobs create temporary per-architecture signing keys which do not form
+a stable trust root. One way to generate the secret is:
 
 ```sh
 openssl genrsa -out cno-alpine.rsa 4096
 base64 -w0 cno-alpine.rsa
 ```
 
-Keep the private key out of Git and store the printed value only in the Actions
-secret.
-
-The workflow can also be triggered by an upstream automation:
+Keep the private key out of Git. Upstream automation can trigger the workflow
+with:
 
 ```sh
 gh api --method POST repos/OWNER/cno-builds/dispatches \
@@ -57,94 +105,80 @@ gh api --method POST repos/OWNER/cno-builds/dispatches \
   -F 'client_payload={"tag":"v1.1.0","publish":true}'
 ```
 
-That request needs a token allowed to dispatch workflows in this repository.
-Published package releases use the tag `packages-v<version>-r<package-release>`;
-this deliberately cannot collide with cno-cli source tags.
-
-The workflow performs these checks before publishing:
-
-- validates every upstream archive against the upstream release checksum;
-- installs, runs TypeScript with OXC, and uninstalls every Debian and Alpine
-  architecture in a clean target-architecture container;
-- repeats the amd64 and arm64 `.deb` test on Ubuntu 24.04;
-- builds both OpenWrt formats with official SDKs, then executes the SDK-staged
-  static runtime on the target CPU through QEMU where necessary;
-- publishes `SHA256SUMS.txt`, build provenance for OpenWrt packages, and Alpine
-  public signing keys with the packages.
+Published releases use `packages-v<version>-r<package-release>`, separate from
+cno-cli source tags. The release contains package files, Alpine public keys,
+OpenWrt build provenance, and `SHA256SUMS.txt`.
 
 ## Install packages
 
-Download the package matching the operating system and CPU from this
-repository's package release, then verify it against `SHA256SUMS.txt`.
+Download the package matching the operating system and CPU, then verify it
+against `SHA256SUMS.txt`.
 
 Debian or Ubuntu:
 
 ```sh
-sudo apt install ./cno_1.1.0-1_amd64.deb
+sudo apt install ./cno_1.1.0-2_amd64.deb
 ```
 
-Alpine packages are signed with the public key shipped beside the release. Copy
-the release key before installation (the auto-generated trial keys include the
-architecture in their filename):
+Alpine (copy the matching public key first):
 
 ```sh
 sudo cp cno-1.1.0-x86_64.rsa.pub /etc/apk/keys/
-sudo apk add ./cno-1.1.0-r1-x86_64.apk
+sudo apk add ./cno-1.1.0-r2-x86_64.apk
 ```
 
-OpenWrt 24.10.x (opkg/IPK):
+OpenWrt 24.10.x example:
 
 ```sh
-opkg install ./cno-1.1.0-r1-openwrt-24.10.4-x86-64.ipk
+opkg install ./cno-1.1.0-r2-openwrt-24.10.4-bcm27xx-bcm2710.ipk
 ```
 
-OpenWrt snapshots (apk-tools/APK) use a locally built SDK key that is not part
-of the firmware trust store, so install a downloaded standalone package with:
+OpenWrt snapshot APKs use the SDK's local build key rather than a firmware trust
+key, so a downloaded standalone package is installed explicitly as untrusted:
 
 ```sh
-apk add --allow-untrusted ./cno-1.1.0-r1-openwrt-snapshots-x86-64.apk
+apk add --allow-untrusted ./cno-1.1.0-r2-openwrt-snapshots-bcm27xx-bcm2710.apk
 ```
 
-In all cases, verify the installation with:
+Then verify the runtime:
 
 ```sh
 cno --version
 cno setup
 ```
 
-Package removal is native as well: `apt remove cno`, `apk del cno`, or
-`opkg remove cno`.
+Removal remains native: `apt remove cno`, `apk del cno`, or `opkg remove cno`.
 
 ## Local checks
 
-On Debian/Ubuntu, install `shellcheck`, `ripgrep`, and `dpkg-dev`, then run:
+On Debian/Ubuntu, install `shellcheck`, `ripgrep`, `jq`, and `dpkg-dev`, then
+run:
 
 ```sh
 sh scripts/check.sh
 ```
 
-The check builds the same `.deb` fixture twice and compares the bytes, in
-addition to shell syntax, metadata, paths, permissions, and symlink checks.
-Actual Alpine and OpenWrt builds stay in GitHub Actions because they require a
-target Alpine environment or a downloaded OpenWrt SDK.
+The check validates shell syntax and all matrices, builds the same Debian
+fixture twice to verify reproducibility, and assembles a complete synthetic
+release set. Actual OpenWrt compilation stays in GitHub Actions because every
+row requires a downloaded target SDK and QEMU runtime root.
 
-Configuration is centralized in [`config/project.env`](config/project.env).
-Increase `CNO_PACKAGE_RELEASE` when packaging changes without a new cno version.
-Generated files go under `downloads/`, `work/`, and `dist/`, all ignored by Git.
+Shared configuration is in [`config/project.env`](config/project.env).
+Increment `CNO_PACKAGE_RELEASE` when packaging changes without a new cno
+version. Generated files go under `downloads/`, `work/`, and `dist/`.
 
 ## Design boundaries
 
-- The glibc package baseline is Debian 12 (`glibc >= 2.36`). It also covers
-  Ubuntu 24.04 and newer releases; older distributions are not claimed.
-- Alpine dynamic packages target the Alpine 3.21 musl ABI and retain upstream
-  private libraries, including the OXC accelerator.
-- OpenWrt targets are deliberately conservative. Add a row only after the cno
-  static binary's CPU ABI is known to match that OpenWrt subtarget; similar CPU
-  names do not guarantee compatible float or instruction-set ABIs.
-- The upstream glibc `armv6` archive is not published as Debian `armel`: armel
-  permits ARMv5 CPUs, while that runtime intentionally requires ARMv6. A package
-  that installs successfully and then raises an illegal-instruction fault would
-  be misleading.
-- This repository never modifies or commits `../cno-cli`. A package build uses
-  only assets already published by that project.
+- Debian packages require glibc 2.36 or newer; Debian 12 and Ubuntu 24.04 are
+  the tested baselines.
+- Alpine packages retain the upstream private dynamic libraries and OXC module.
+- OpenWrt packages use the selected SDK's musl loader and system shared
+  libraries. They do not use the generic static cno archive and do not carry a
+  private `$ORIGIN/lib` RPATH.
+- ARM float ABI variants and CPU generations are separate rows whenever the
+  official SDK exposes them.
+- The upstream glibc ARMv6 archive is not labeled Debian armel, because armel
+  also permits ARMv5 CPUs.
+- This repository never writes to or commits `../cno-cli`; source is checked out
+  afresh at the immutable release commit by the workflow.
 

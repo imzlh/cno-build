@@ -42,15 +42,24 @@ case $matrix in
             inputs
             | select(length > 0 and (startswith("#") | not))
             | split("\t")
-            | select(length == 4)
+            | select(length == 14)
             | . as $row
-            | ("ipk", "apk")
+            | ($row[0] | split("+"))[]
             | {
                 format: .,
-                target: $row[0],
-                subtarget: $row[1],
-                cno_target: $row[2],
-                platform: $row[3]
+                target: $row[1],
+                subtarget: $row[2],
+                expected_arch: $row[3],
+                cpu_tune: $row[4],
+                endian: $row[5],
+                float_abi: $row[6],
+                rust_target: $row[7],
+                rust_cpu: $row[8],
+                rust_features: $row[9],
+                emulator: $row[10],
+                wamr_target: $row[11],
+                wasm: $row[12],
+                machine_regex: $row[13]
               }
         ]' "$CNO_BUILDS_ROOT/config/openwrt-targets.tsv"
         ;;

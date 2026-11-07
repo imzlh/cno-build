@@ -4,43 +4,154 @@ PKG_NAME:=cno
 PKG_VERSION:=$(CNO_VERSION)
 PKG_RELEASE:=$(CNO_PACKAGE_RELEASE)
 
-PKG_SOURCE:=cno-linux-musl-$(CNO_RELEASE_TARGET).tar.gz
-PKG_SOURCE_URL:=https://github.com/imzlh/cno-cli/releases/download/v$(PKG_VERSION)/
+CNO_SOURCE_ARCHIVE?=cno-source-$(PKG_VERSION).tar.gz
+CNO_BUNDLE_FILE?=cno-cli-$(PKG_VERSION).min.js
+CNO_OXC_ARCHIVE?=cno-oxc-$(PKG_VERSION)-$(ARCH_PACKAGES).a
+CNO_QEMU?=qemu-$(ARCH)
+CNO_BIG_ENDIAN?=0
+CNO_WASM?=ON
+CNO_WAMR_TARGET?=
+CNO_OPENWRT_DEPENDS?=+ca-bundle +libc +libcurl4 +libopenssl3 +libsqlite3-0 +libffi +libexpat +zlib
+
+PKG_SOURCE:=$(CNO_SOURCE_ARCHIVE)
+PKG_SOURCE_URL:=file://$(DL_DIR)
 PKG_HASH:=$(CNO_SOURCE_SHA256)
 PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)
+PKG_BUILD_PARALLEL:=1
+PKG_INSTALL:=1
+CMAKE_BINARY_SUBDIR:=build
 
 PKG_LICENSE:=MIT
+PKG_LICENSE_FILES:=circu.js/LICENSE
 PKG_MAINTAINER:=cno maintainers <imzlh@users.noreply.github.com>
 
 include $(INCLUDE_DIR)/package.mk
+include $(INCLUDE_DIR)/cmake.mk
 
-# cno release archives are intentionally flat (cno, ext/, lib/) rather than
-# wrapped in a versioned directory, so bypass package.mk's usual source layout.
-define Build/Prepare
-	rm -rf $(PKG_BUILD_DIR)
-	mkdir -p $(PKG_BUILD_DIR)
-	tar -xzf $(DL_DIR)/$(PKG_SOURCE) -C $(PKG_BUILD_DIR)
-endef
+CNO_CMAKE_BUILD_DIR:=$(PKG_BUILD_DIR)/build
+CNO_TARGET_BIN_DIR:=$(CNO_CMAKE_BUILD_DIR)/bin
+CNO_EXT_DIR:=$(PKG_BUILD_DIR)/openwrt-ext
+CNO_CJSC_WRAPPER:=$(PKG_BUILD_DIR)/run-target-cjsc
+CNO_QJSC_WRAPPER:=$(PKG_BUILD_DIR)/run-target-qjsc
+CNO_QEMU_ROOT:=$(PKG_BUILD_DIR)/qemu-root
 
 define Package/cno
   SECTION:=lang
   CATEGORY:=Languages
   TITLE:=Deno-compatible TypeScript and JavaScript runtime
   URL:=https://github.com/imzlh/cno-cli
-  DEPENDS:=+ca-bundle
+  DEPENDS:=$(CNO_OPENWRT_DEPENDS)
 endef
 
 define Package/cno/description
  cno is a native TypeScript and JavaScript runtime with Deno-style commands,
- Web APIs, and practical Node.js compatibility.
+ Web APIs, and practical Node.js compatibility.  This package is compiled by
+ the selected OpenWrt SDK for its exact target and subtarget.
 endef
 
+# The source tarball has one cno-VERSION/ prefix.  The bundle and Rust archive
+# are intentionally separate: the former is host-independent JavaScript while
+# the latter is rebuilt for every SDK/CPU row.
+define Build/Prepare
+	rm -rf $(PKG_BUILD_DIR)
+	mkdir -p $(PKG_BUILD_DIR) $(CNO_EXT_DIR)
+	echo "$(CNO_SOURCE_SHA256)  $(DL_DIR)/$(CNO_SOURCE_ARCHIVE)" | sha256sum -c -
+	echo "$(CNO_BUNDLE_SHA256)  $(DL_DIR)/$(CNO_BUNDLE_FILE)" | sha256sum -c -
+	echo "$(CNO_OXC_SHA256)  $(DL_DIR)/$(CNO_OXC_ARCHIVE)" | sha256sum -c -
+	tar -xzf $(DL_DIR)/$(CNO_SOURCE_ARCHIVE) --strip-components=1 -C $(PKG_BUILD_DIR)
+	cp $(DL_DIR)/$(CNO_BUNDLE_FILE) $(PKG_BUILD_DIR)/cno-cli.openwrt.min.js
+	cp $(DL_DIR)/$(CNO_OXC_ARCHIVE) $(PKG_BUILD_DIR)/libcjs_oxc_core.openwrt.a
+	cp $(CURDIR)/openwrt-project.cmake $(PKG_BUILD_DIR)/openwrt-project.cmake
+endef
+
+# Link only the native OXC binding here.  Its pure-Rust staticlib was made on
+# the Actions host with PIC, but this final ELF link must use the SDK compiler
+# and its exact target flags.  Undefined JS_* imports are resolved by the cno
+# executable at dlopen time.
+define Build/Configure
+	$(TARGET_CC) $(TARGET_CPPFLAGS) $(TARGET_CFLAGS) -fPIC -shared \
+		-I$(PKG_BUILD_DIR)/ext-oxc/include \
+		-I$(PKG_BUILD_DIR)/circu.js/src \
+		-I$(PKG_BUILD_DIR)/circu.js/deps/quickjs \
+		-I$(PKG_BUILD_DIR)/circu.js/deps/libuv/include \
+		-o $(CNO_EXT_DIR)/oxc.so \
+		$(PKG_BUILD_DIR)/ext-oxc/native/binding.c \
+		$(PKG_BUILD_DIR)/libcjs_oxc_core.openwrt.a \
+		$(TARGET_LDFLAGS) \
+		-Wl,--allow-shlib-undefined,--gc-sections,--exclude-libs,ALL,--disable-new-dtags \
+		-ldl -lpthread -lm -lrt -lutil
+	rm -rf $(CNO_QEMU_ROOT)
+	mkdir -p $(CNO_QEMU_ROOT)/lib $(CNO_QEMU_ROOT)/usr/lib
+	if [ -d $(TOOLCHAIN_DIR)/lib ]; then \
+		cp -aL $(TOOLCHAIN_DIR)/lib/. $(CNO_QEMU_ROOT)/lib/; \
+	fi
+	if [ -d $(STAGING_DIR)/lib ]; then \
+		cp -aL $(STAGING_DIR)/lib/. $(CNO_QEMU_ROOT)/lib/; \
+	fi
+	if [ -d $(STAGING_DIR)/usr/lib ]; then \
+		cp -aL $(STAGING_DIR)/usr/lib/. $(CNO_QEMU_ROOT)/usr/lib/; \
+	fi
+	printf '%s\n' '#!/bin/sh' \
+		'exec $(CNO_QEMU) -L "$(CNO_QEMU_ROOT)" "$(CNO_TARGET_BIN_DIR)/cjsc" "$$$$@"' \
+		> $(CNO_CJSC_WRAPPER)
+	printf '%s\n' '#!/bin/sh' \
+		'exec $(CNO_QEMU) -L "$(CNO_QEMU_ROOT)" "$(CNO_TARGET_BIN_DIR)/qjsc" "$$$$@"' \
+		> $(CNO_QJSC_WRAPPER)
+	chmod 0755 $(CNO_CJSC_WRAPPER) $(CNO_QJSC_WRAPPER)
+	$(call Build/Configure/Default)
+endef
+
+CMAKE_OPTIONS += \
+	-DCMAKE_BUILD_TYPE=Release \
+	-DCMAKE_RUNTIME_OUTPUT_DIRECTORY=$(CNO_TARGET_BIN_DIR) \
+	-DCMAKE_INSTALL_LIBDIR=lib \
+	-DCMAKE_PROJECT_cjs_INCLUDE=$(PKG_BUILD_DIR)/openwrt-project.cmake \
+	-DCMAKE_SKIP_RPATH=ON \
+	-DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+	-DCNO_RELEASE=ON \
+	-DCNO_BUNDLE_MINIFY=ON \
+	-DCNO_PREBUILT_BUNDLE=$(PKG_BUILD_DIR)/cno-cli.openwrt.min.js \
+	-DCJSC_PATH=$(CNO_CJSC_WRAPPER) \
+	-DCNO_EXT_DIR=$(CNO_EXT_DIR) \
+	-DCNO_WITH_BROTLI=OFF \
+	-DCNO_EMBED_EXT_H2=OFF \
+	-DCNO_EMBED_EXT_QUIC=OFF \
+	-DBUILD_SHARED_LIBS=OFF \
+	-DBUILD_WITH_WASM=$(CNO_WASM) \
+	-DWAMR_BUILD_TARGET=$(CNO_WAMR_TARGET) \
+	-DCMAKE_DISABLE_FIND_PACKAGE_llhttp=TRUE \
+	-DFETCHCONTENT_SOURCE_DIR_LLHTTP=$(PKG_BUILD_DIR)/vendor/llhttp
+
+# cjsc emits QuickJS bytecode in the target's ABI and byte order.  It therefore
+# must be the SDK-built executable running through qemu-user, never a host cjsc.
+# QuickJS also checks in three generated bytecode headers; regenerate them on
+# big-endian targets before the final cjsc and cno links.
 define Build/Compile
+	+$(NINJA) $(PKG_JOBS) -C $(CMAKE_BINARY_DIR) cjsc qjsc
+	if [ "$(CNO_BIG_ENDIAN)" = 1 ]; then \
+		cd $(PKG_BUILD_DIR)/circu.js/deps/quickjs; \
+		for builtin in builtin-array-fromasync builtin-iterator-zip builtin-iterator-zip-keyed; do \
+			$(CNO_QJSC_WRAPPER) -C -ss -o $$$$builtin.h $$$$builtin.js; \
+		done; \
+	fi
+	+$(NINJA) $(PKG_JOBS) -C $(CMAKE_BINARY_DIR) cjsc
+	$(call Build/Compile/Default)
 endef
 
 define Package/cno/install
-	$(INSTALL_DIR) $(1)/usr/bin
-	$(INSTALL_BIN) $(PKG_BUILD_DIR)/cno $(1)/usr/bin/cno
+	$(INSTALL_DIR) $(1)/usr/lib/cno/ext $(1)/usr/bin
+	if [ -x $(PKG_INSTALL_DIR)/usr/bin/cno ]; then \
+		CNO_STAGED_BIN=$(PKG_INSTALL_DIR)/usr/bin/cno; \
+		CNO_STAGED_OXC=$(PKG_INSTALL_DIR)/usr/lib/cno/ext/oxc.so; \
+	else \
+		CNO_STAGED_BIN=$(CNO_CMAKE_BUILD_DIR)/stage/cno; \
+		CNO_STAGED_OXC=$(CNO_CMAKE_BUILD_DIR)/stage/ext/oxc.so; \
+	fi; \
+	test -x $$$${CNO_STAGED_BIN}; \
+	test -f $$$${CNO_STAGED_OXC}; \
+	$(INSTALL_BIN) $$$${CNO_STAGED_BIN} $(1)/usr/lib/cno/cno; \
+	$(INSTALL_BIN) $$$${CNO_STAGED_OXC} $(1)/usr/lib/cno/ext/oxc.so
+	ln -s ../lib/cno/cno $(1)/usr/bin/cno
 endef
 
 $(eval $(call BuildPackage,cno))

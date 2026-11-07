@@ -1,6 +1,22 @@
-# OpenWrt target<TAB>subtarget<TAB>cno release target<TAB>OCI platform
-x86	64	x86_64	linux/amd64
-x86	generic	i386	linux/386
-armsr	armv8	arm64	linux/arm64
-armsr	armv7	armv7	linux/arm/v7
-
+# formats<TAB>target<TAB>subtarget<TAB>expected ARCH_PACKAGES<TAB>CPU tune<TAB>endian<TAB>float ABI<TAB>Rust target<TAB>Rust CPU<TAB>Rust features<TAB>QEMU<TAB>WAMR target<TAB>WASM<TAB>machine regex
+# formats is ipk, apk, or ipk+apk. Every row is built independently in its own official SDK.
+# ARCH_PACKAGES values are high-confidence expectations; the build fails if the downloaded SDK reports another value.
+ipk+apk	x86	64	x86_64	x86-64	little	none	x86_64-unknown-linux-musl	x86-64	default	qemu-x86_64	X86_64	ON	Advanced Micro Devices X86-64
+ipk+apk	x86	generic	i386_pentium4	pentium4	little	none	i586-unknown-linux-musl	pentium4	default	qemu-i386	X86_32	ON	Intel 80386
+ipk+apk	armsr	armv8	aarch64_generic	generic-armv8	little	none	aarch64-unknown-linux-musl	generic	default	qemu-aarch64	AARCH64	ON	AArch64
+ipk+apk	bcm27xx	bcm2710	aarch64_cortex-a53	cortex-a53	little	none	aarch64-unknown-linux-musl	cortex-a53	default	qemu-aarch64	AARCH64	ON	AArch64
+ipk+apk	bcm27xx	bcm2711	aarch64_cortex-a72	cortex-a72	little	none	aarch64-unknown-linux-musl	cortex-a72	default	qemu-aarch64	AARCH64	ON	AArch64
+ipk+apk	at91	sama5	arm_cortex-a5_vfpv4	cortex-a5	little	hard	armv7-unknown-linux-musleabihf	cortex-a5	arm-hard-d16	qemu-arm	ARMV7_VFP	ON	ARM
+ipk+apk	mediatek	mt7629	arm_cortex-a7	cortex-a7	little	soft	armv7-unknown-linux-musleabi	cortex-a7	arm-soft-nofp	qemu-arm	ARMV7	ON	ARM
+ipk+apk	sunxi	cortexa7	arm_cortex-a7_neon-vfpv4	cortex-a7-neon-vfpv4	little	hard	armv7-unknown-linux-musleabihf	cortex-a7	arm-hard-neon	qemu-arm	ARMV7A_VFP	ON	ARM
+ipk+apk	armsr	armv7	arm_cortex-a15_neon-vfpv4	cortex-a15	little	hard	armv7-unknown-linux-musleabihf	cortex-a15	arm-hard-neon	qemu-arm	ARMV7_VFP	ON	ARM
+ipk+apk	bcm53xx	generic	arm_cortex-a9	cortex-a9	little	soft	armv7-unknown-linux-musleabi	cortex-a9	arm-soft-nofp	qemu-arm	ARMV7	ON	ARM
+ipk+apk	mvebu	cortexa9	arm_cortex-a9_vfpv3-d16	cortex-a9-vfpv3-d16	little	hard	armv7-unknown-linux-musleabihf	cortex-a9	arm-hard-d16	qemu-arm	ARMV7_VFP	ON	ARM
+ipk+apk	bcm27xx	bcm2708	arm_arm1176jzf-s_vfp	arm1176jzf-s	little	hard	arm-unknown-linux-musleabihf	arm1176jzf-s	default	qemu-arm	ARMV6_VFP	OFF	ARM
+ipk+apk	at91	sam9x	arm_arm926ej-s	arm926ej-s	little	soft	armv5te-unknown-linux-musleabi	arm926ej-s	default	qemu-arm	ARM	OFF	ARM
+ipk+apk	kirkwood	generic	arm_xscale	xscale	little	soft	armv5te-unknown-linux-musleabi	xscale	default	qemu-arm	ARMV5	OFF	ARM
+ipk+apk	ath79	generic	mips_24kc	mips-24kc	big	soft	mips-unknown-linux-musl	mips32r2	default	qemu-mips	MIPS	OFF	MIPS
+ipk+apk	ramips	mt7620	mipsel_24kc	mips-24kc	little	soft	mipsel-unknown-linux-musl	mips32r2	default	qemu-mipsel	MIPS	OFF	MIPS
+ipk+apk	ramips	rt3883	mipsel_74kc	mips-74kc	little	soft	mipsel-unknown-linux-musl	mips32r2	default	qemu-mipsel	MIPS	OFF	MIPS
+ipk+apk	ramips	mt7621	mipsel_24kc	mips-1004kc	little	soft	mipsel-unknown-linux-musl	mips32r2	default	qemu-mipsel	MIPS	OFF	MIPS
+ipk+apk	sifiveu	generic	riscv64_riscv64	rv64gc	little	none	riscv64gc-unknown-linux-musl	generic-rv64	default	qemu-riscv64	RISCV64	ON	RISC-V

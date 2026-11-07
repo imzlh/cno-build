@@ -29,6 +29,7 @@ jobs:
     outputs:
       tag: ${{ steps.release.outputs.tag }}
       version: ${{ steps.release.outputs.version }}
+      commit: ${{ steps.release.outputs.commit }}
       source_date_epoch: ${{ steps.release.outputs.source_date_epoch }}
       openwrt_ipk_release: ${{ steps.openwrt.outputs.release }}
       package_release: ${{ steps.package.outputs.release }}
@@ -73,6 +74,44 @@ jobs:
             publish=${MANUAL_PUBLISH:-false}
           fi
           echo "publish=$publish" >> "$GITHUB_OUTPUT"
+
+  openwrt-source:
+    name: Prepare immutable OpenWrt source
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check out immutable cno source with submodules
+        uses: actions/checkout@v4
+        with:
+          repository: imzlh/cno-cli
+          ref: ${{ needs.prepare.outputs.commit }}
+          path: work/cno-cli
+          submodules: recursive
+          fetch-depth: 1
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.17.1
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Bundle JavaScript and archive tracked source
+        run: |
+          actual=$(git -C work/cno-cli rev-parse HEAD)
+          test "$actual" = '${{ needs.prepare.outputs.commit }}'
+          sh scripts/prepare-openwrt-source.sh work/cno-cli "$actual" \
+            '${{ needs.prepare.outputs.version }}' work/openwrt-source \
+            '${{ needs.prepare.outputs.source_date_epoch }}'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cno-openwrt-source-${{ needs.prepare.outputs.commit }}
+          path: work/openwrt-source/
+          if-no-files-found: error
+          # With 38 SDK jobs capped at six in parallel, the final batch can
+          # start more than a day after this shared artifact is prepared.
+          retention-days: 3
 
   deb:
     name: DEB ${{ matrix.deb_arch }}
@@ -229,56 +268,60 @@ jobs:
 
   openwrt:
     name: OpenWrt ${{ matrix.format }} ${{ matrix.target }}/${{ matrix.subtarget }}
-    needs: prepare
+    needs: [prepare, openwrt-source]
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 240
     strategy:
       fail-fast: false
+      max-parallel: 6
       matrix:
         include: ${{ fromJSON(needs.prepare.outputs.openwrt_matrix) }}
     steps:
       - uses: actions/checkout@v4
-      - uses: docker/setup-qemu-action@v3
+      - uses: actions/download-artifact@v4
         with:
-          platforms: arm,arm64,386
+          name: cno-openwrt-source-${{ needs.prepare.outputs.commit }}
+          path: work/openwrt-source
       - name: Install OpenWrt SDK host tools
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential clang flex bison g++ gawk gcc-multilib gettext git \
-            libncurses-dev libssl-dev python3 python3-setuptools rsync swig \
-            unzip zlib1g-dev file wget zstd
-      - name: Download and verify static upstream archive
-        run: |
-          sh scripts/fetch-cno-asset.sh '${{ needs.prepare.outputs.tag }}' \
-            'cno-linux-musl-${{ matrix.cno_target }}.tar.gz' \
-            'downloads/cno-linux-musl-${{ matrix.cno_target }}.tar.gz'
+            build-essential clang cmake ninja-build pkg-config curl ca-certificates \
+            flex bison g++ gawk gcc-multilib gettext git libncurses-dev \
+            libssl-dev python3 python3-setuptools rsync swig unzip zlib1g-dev \
+            file wget zstd qemu-user
+      - uses: dtolnay/rust-toolchain@stable
       - name: Build with the official OpenWrt SDK
         env:
           FORMAT: ${{ matrix.format }}
           STABLE_RELEASE: ${{ needs.prepare.outputs.openwrt_ipk_release }}
           TARGET: ${{ matrix.target }}
           SUBTARGET: ${{ matrix.subtarget }}
-          CNO_TARGET: ${{ matrix.cno_target }}
+          EXPECTED_ARCH: ${{ matrix.expected_arch }}
+          CPU_TUNE: ${{ matrix.cpu_tune }}
+          ENDIAN: ${{ matrix.endian }}
+          FLOAT_ABI: ${{ matrix.float_abi }}
+          RUST_TARGET: ${{ matrix.rust_target }}
+          RUST_CPU: ${{ matrix.rust_cpu }}
+          RUST_FEATURES: ${{ matrix.rust_features }}
+          EMULATOR: ${{ matrix.emulator }}
+          WAMR_TARGET: ${{ matrix.wamr_target }}
+          WASM: ${{ matrix.wasm }}
+          MACHINE_REGEX: ${{ matrix.machine_regex }}
           VERSION: ${{ needs.prepare.outputs.version }}
+          SOURCE_COMMIT: ${{ needs.prepare.outputs.commit }}
+          CNO_OXC_RUST_NIGHTLY: nightly-2026-10-15
+          CNO_OXC_RUST_TOOLCHAIN: 1.95.0
         run: |
           if [ "$FORMAT" = ipk ]; then release=$STABLE_RELEASE; else release=snapshots; fi
           sh scripts/build-openwrt.sh "$FORMAT" "$release" "$TARGET" "$SUBTARGET" \
-            "$CNO_TARGET" "$VERSION" "downloads/cno-linux-musl-$CNO_TARGET.tar.gz" \
+            "$EXPECTED_ARCH" "$CPU_TUNE" "$ENDIAN" "$FLOAT_ABI" \
+            "$RUST_TARGET" "$RUST_CPU" "$RUST_FEATURES" \
+            "$EMULATOR" "$WAMR_TARGET" "$WASM" \
+            "$MACHINE_REGEX" "$VERSION" "$SOURCE_COMMIT" \
+            "work/openwrt-source/cno-source-$VERSION.tar.gz" \
+            "work/openwrt-source/cno-cli-$VERSION.min.js" \
             "dist/openwrt/$FORMAT/$TARGET-$SUBTARGET"
-      - name: Execute OpenWrt-staged binary on target CPU
-        env:
-          PLATFORM: ${{ matrix.platform }}
-          VERSION: ${{ needs.prepare.outputs.version }}
-          FORMAT: ${{ matrix.format }}
-          TARGET: ${{ matrix.target }}
-          SUBTARGET: ${{ matrix.subtarget }}
-        run: |
-          runtime=$(find "dist/openwrt/$FORMAT/$TARGET-$SUBTARGET" -type f -name '*.runtime' -print -quit)
-          test -n "$runtime"
-          docker run --rm --platform "$PLATFORM" \
-            -e VERSION -v "$GITHUB_WORKSPACE:/work:ro" alpine:3.21 \
-            sh /work/scripts/smoke-static-binary.sh "/work/$runtime" "$VERSION"
       - uses: actions/upload-artifact@v4
         with:
           name: packages-openwrt-${{ matrix.format }}-${{ matrix.target }}-${{ matrix.subtarget }}
@@ -291,7 +334,10 @@ jobs:
     name: Assemble and publish
     needs: [prepare, deb, deb-ubuntu, alpine, openwrt]
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    # This downloads and republishes 38 OpenWrt artifacts plus Debian and
+    # Alpine packages; OXC makes the aggregate substantially larger than the
+    # old generic-binary package set.
+    timeout-minutes: 45
     permissions:
       contents: write
     steps:

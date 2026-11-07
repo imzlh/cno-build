@@ -10,6 +10,7 @@ need_command shellcheck
 need_command dpkg-deb
 need_command jq
 need_command rg
+need_command rustc
 need_command tar
 
 find "$CNO_BUILDS_ROOT/scripts" -type f -name '*.sh' -print | sort \
@@ -21,18 +22,34 @@ shellcheck -x -s sh \
     -P "$CNO_BUILDS_ROOT/scripts/lib" \
     "$CNO_BUILDS_ROOT"/scripts/*.sh "$CNO_BUILDS_ROOT"/scripts/lib/*.sh
 
-for table in \
-    "$CNO_BUILDS_ROOT/config/debian-targets.tsv" \
-    "$CNO_BUILDS_ROOT/config/alpine-targets.tsv" \
-    "$CNO_BUILDS_ROOT/config/openwrt-targets.tsv"
+for table_spec in \
+    "$CNO_BUILDS_ROOT/config/debian-targets.tsv:4" \
+    "$CNO_BUILDS_ROOT/config/alpine-targets.tsv:3" \
+    "$CNO_BUILDS_ROOT/config/openwrt-targets.tsv:14"
 do
+    table=${table_spec%:*}
+    expected_columns=${table_spec##*:}
     awk -F '\t' '
         /^#/ || NF == 0 { next }
-        NF < 3 { print FILENAME ":" FNR ": expected at least three TSV columns" > "/dev/stderr"; bad=1 }
+        NF != expected { print FILENAME ":" FNR ": expected " expected " TSV columns, got " NF > "/dev/stderr"; bad=1 }
         { for (i=1; i<=NF; i++) if ($i == "") { print FILENAME ":" FNR ": empty field" > "/dev/stderr"; bad=1 } }
         END { exit bad }
-    ' "$table"
+    ' expected="$expected_columns" "$table"
 done
+
+awk -F '\t' '
+    /^#/ || NF == 0 { next }
+    $1 != "ipk" && $1 != "apk" && $1 != "ipk+apk" {
+        print FILENAME ":" FNR ": invalid OpenWrt formats field: " $1 > "/dev/stderr"
+        bad=1
+    }
+    ($2 SUBSEP $3) in target_seen {
+        print FILENAME ":" FNR ": duplicate OpenWrt target/subtarget: " $2 "/" $3 > "/dev/stderr"
+        bad=1
+    }
+    { target_seen[$2 SUBSEP $3]=1 }
+    END { exit bad }
+' "$CNO_BUILDS_ROOT/config/openwrt-targets.tsv"
 
 debian_matrix=$(sh "$CNO_BUILDS_ROOT/scripts/config-matrix.sh" debian)
 alpine_matrix=$(sh "$CNO_BUILDS_ROOT/scripts/config-matrix.sh" alpine)
@@ -40,15 +57,56 @@ openwrt_matrix=$(sh "$CNO_BUILDS_ROOT/scripts/config-matrix.sh" openwrt)
 [ "$(printf '%s' "$debian_matrix" | jq 'length')" -gt 0 ]
 [ "$(printf '%s' "$alpine_matrix" | jq 'length')" -gt 0 ]
 [ "$(printf '%s' "$openwrt_matrix" | jq 'length')" -gt 0 ]
+[ "$(printf '%s' "$openwrt_matrix" | jq 'length')" -eq \
+    "$(awk -F '\t' '!/^#/ && NF { n += split($1, formats, "+") } END { print n + 0 }' \
+        "$CNO_BUILDS_ROOT/config/openwrt-targets.tsv")" ]
 printf '%s' "$debian_matrix" | jq -e 'all(.[]; has("deb_arch") and has("image"))' >/dev/null
 printf '%s' "$alpine_matrix" | jq -e 'all(.[]; has("alpine_arch") and has("platform"))' >/dev/null
 printf '%s' "$openwrt_matrix" | jq -e \
-    'all(.[]; (.format == "ipk" or .format == "apk") and has("subtarget"))' >/dev/null
+    'all(.[];
+        (.format == "ipk" or .format == "apk") and
+        has("subtarget") and has("expected_arch") and has("cpu_tune") and
+        has("rust_target") and has("rust_cpu") and has("emulator") and
+        (.rust_features == "default" or
+         .rust_features == "arm-soft-nofp" or
+         .rust_features == "arm-hard-d16" or
+         .rust_features == "arm-hard-neon") and
+        (.endian == "little" or .endian == "big") and
+        (.float_abi == "hard" or .float_abi == "soft" or .float_abi == "none") and
+        (.wasm == "ON" or .wasm == "OFF"))' >/dev/null
+printf '%s' "$openwrt_matrix" | jq -e \
+    'group_by([.format, .target, .subtarget]) | all(.[]; length == 1)' >/dev/null
+printf '%s' "$openwrt_matrix" | jq -r '.[] | "\(.rust_target)\t\(.rust_cpu)"' \
+    | sort -u \
+    | while IFS="$(printf '\t')" read -r rust_target rust_cpu; do
+        rustc --target "$rust_target" --print target-cpus 2>/dev/null \
+            | awk -v wanted="$rust_cpu" '$1 == wanted { found=1 } END { exit !found }' \
+            || die "Rust CPU $rust_cpu is unavailable for $rust_target"
+    done
+
+# These profiles are deliberately constrained names, not arbitrary compiler
+# flags supplied by the matrix. Keep the profile/target ABI combinations
+# explicit so an edit cannot accidentally re-enable ARM FPU instructions.
+printf '%s' "$openwrt_matrix" | jq -e '
+    all(.[];
+        if .rust_features == "arm-soft-nofp" then
+            (.rust_target | test("^arm.*-musleabi$")) and .float_abi == "soft"
+        elif (.rust_features == "arm-hard-d16" or .rust_features == "arm-hard-neon") then
+            (.rust_target | test("^arm.*-musleabihf$")) and .float_abi == "hard"
+        else true end)' >/dev/null
 
 if rg -n '@[A-Z_]+@' "$CNO_BUILDS_ROOT/packaging" \
     --glob '!APKBUILD.in' >/dev/null; then
     die "unexpected unresolved template placeholder"
 fi
+
+# OpenWrt package recipes are expanded once by BuildPackage's eval and once by
+# make before the shell sees them.  The QEMU wrappers must retain a literal
+# "$@" so target cjsc/qjsc receive their CMake arguments, not make's target.
+wrapper_arg_lines=$(rg -c -F '"$$$$@"' \
+    "$CNO_BUILDS_ROOT/packaging/openwrt/Makefile")
+[ "$wrapper_arg_lines" -eq 2 ] \
+    || die 'OpenWrt QEMU wrappers must double-escape their positional arguments'
 
 work=$(make_temp_dir)
 trap 'rm -rf -- "$work"' EXIT HUP INT TERM
@@ -74,12 +132,12 @@ sh "$CNO_BUILDS_ROOT/scripts/build-deb.sh" \
     1.2.3 amd64 "$work/cno-linux-minimal-x86_64.tar.gz" "$work/out-a" 1700000000
 sh "$CNO_BUILDS_ROOT/scripts/build-deb.sh" \
     1.2.3 amd64 "$work/cno-linux-minimal-x86_64.tar.gz" "$work/out-b" 1700000000
-package_a="$work/out-a/cno_1.2.3-1_amd64.deb"
-package_b="$work/out-b/cno_1.2.3-1_amd64.deb"
+package_a="$work/out-a/cno_1.2.3-${CNO_PACKAGE_RELEASE}_amd64.deb"
+package_b="$work/out-b/cno_1.2.3-${CNO_PACKAGE_RELEASE}_amd64.deb"
 cmp "$package_a" "$package_b"
 [ "$(dpkg-deb -f "$package_a" Package)" = cno ]
 [ "$(dpkg-deb -f "$package_a" Architecture)" = amd64 ]
-[ "$(dpkg-deb -f "$package_a" Version)" = 1.2.3-1 ]
+[ "$(dpkg-deb -f "$package_a" Version)" = "1.2.3-${CNO_PACKAGE_RELEASE}" ]
 dpkg-deb --ctrl-tarfile "$package_a" | tar -tf - | grep -Fx './md5sums' >/dev/null
 dpkg-deb -x "$package_a" "$work/extracted"
 [ "$(readlink "$work/extracted/usr/bin/cno")" = ../lib/cno/cno ]
@@ -99,12 +157,20 @@ awk -F '\t' '!/^#/ && NF { print $2 }' "$CNO_BUILDS_ROOT/config/alpine-targets.t
         touch "$release_input/cno-1.2.3-r${CNO_PACKAGE_RELEASE}-${arch}.apk"
         touch "$release_input/cno-1.2.3-${arch}.rsa.pub"
     done
-awk -F '\t' '!/^#/ && NF { print $1, $2 }' "$CNO_BUILDS_ROOT/config/openwrt-targets.tsv" \
-    | while read -r target subtarget; do
-        stable="cno-1.2.3-r${CNO_PACKAGE_RELEASE}-openwrt-24.10.0-${target}-${subtarget}.ipk"
-        snapshot="cno-1.2.3-r${CNO_PACKAGE_RELEASE}-openwrt-snapshots-${target}-${subtarget}.apk"
-        touch "$release_input/$stable" "$release_input/$stable.buildinfo"
-        touch "$release_input/$snapshot" "$release_input/$snapshot.buildinfo"
+awk -F '\t' '!/^#/ && NF { print $1, $2, $3 }' "$CNO_BUILDS_ROOT/config/openwrt-targets.tsv" \
+    | while read -r formats target subtarget; do
+        case "+$formats+" in
+            *+ipk+*)
+                stable="cno-1.2.3-r${CNO_PACKAGE_RELEASE}-openwrt-24.10.0-${target}-${subtarget}.ipk"
+                touch "$release_input/$stable" "$release_input/$stable.buildinfo"
+                ;;
+        esac
+        case "+$formats+" in
+            *+apk+*)
+                snapshot="cno-1.2.3-r${CNO_PACKAGE_RELEASE}-openwrt-snapshots-${target}-${subtarget}.apk"
+                touch "$release_input/$snapshot" "$release_input/$snapshot.buildinfo"
+                ;;
+        esac
     done
 sh "$CNO_BUILDS_ROOT/scripts/collect-release.sh" \
     "$release_input" "$release_output" 1.2.3
