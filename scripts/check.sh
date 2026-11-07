@@ -128,7 +128,7 @@ do
     grep -Fq "$compile_call" "$CNO_BUILDS_ROOT/packaging/openwrt/Makefile" \
         || die "OpenWrt package recipe bypasses the official CMake compile macro: $compile_call"
 done
-if rg -n '^[[:space:]]*\+\$\(NINJA\)' \
+if rg -n '^[[:space:]]*[+]?\$\(NINJA\)' \
     "$CNO_BUILDS_ROOT/packaging/openwrt/Makefile" >/dev/null; then
     die 'OpenWrt package recipe must not bypass Build/Compile/Default with a direct Ninja call'
 fi
