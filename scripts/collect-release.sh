@@ -6,11 +6,18 @@ export CNO_BUILDS_ROOT
 # shellcheck source=lib/common.sh
 . "$CNO_BUILDS_ROOT/scripts/lib/common.sh"
 
-input_dir=${1:?Usage: collect-release.sh INPUT_DIR OUTPUT_DIR VERSION}
+input_dir=${1:?Usage: collect-release.sh INPUT_DIR OUTPUT_DIR VERSION [SOURCE_COMMIT] [SOURCE_URL]}
 output_dir=${2:?Missing output directory}
 version=${3:?Missing version}
+source_commit=${4:-}
+source_url=${5:-}
 validate_version "$version"
 [ -d "$input_dir" ] || die "artifact directory not found: $input_dir"
+if [ -n "$source_commit" ]; then
+    case $source_commit in *[!0-9a-fA-F]*) die "invalid source commit: $source_commit" ;; esac
+    [ "${#source_commit}" -eq 40 ] || die 'source commit must contain 40 hexadecimal characters'
+fi
+case $source_url in ''|https://*) ;; *) die "invalid source URL: $source_url" ;; esac
 
 mkdir -p "$output_dir"
 find "$input_dir" -type f \( \
@@ -103,7 +110,8 @@ awk -F '\t' '!/^#/ && NF { print $1, $2, $3 }' "$CNO_BUILDS_ROOT/config/openwrt-
 cat > "$output_dir/RELEASE-INFO.txt" <<EOF
 cno version: $version
 package release: $CNO_PACKAGE_RELEASE
-upstream: $CNO_HOMEPAGE/releases/tag/v$version
+source commit: ${source_commit:-unknown}
+upstream: ${source_url:-$CNO_HOMEPAGE}
 Debian baseline: Debian 12 / glibc $CNO_MIN_GLIBC
 Ubuntu baseline: Ubuntu 24.04 / glibc $CNO_MIN_GLIBC or newer
 Alpine baseline: Alpine $CNO_ALPINE_BASELINE / musl

@@ -17,6 +17,7 @@ find "$CNO_BUILDS_ROOT/scripts" -type f -name '*.sh' -print | sort \
     | while IFS= read -r script; do sh -n "$script"; done
 # common.sh is a sourced library and intentionally has no shebang invocation.
 shellcheck -x -s sh \
+    -e SC1007 -e SC2016 \
     -P "$CNO_BUILDS_ROOT" \
     -P "$CNO_BUILDS_ROOT/scripts" \
     -P "$CNO_BUILDS_ROOT/scripts/lib" \
@@ -107,9 +108,215 @@ wrapper_arg_lines=$(rg -c -F '"$$$$@"' \
     "$CNO_BUILDS_ROOT/packaging/openwrt/Makefile")
 [ "$wrapper_arg_lines" -eq 2 ] \
     || die 'OpenWrt QEMU wrappers must double-escape their positional arguments'
+grep -Fq -- '-DCNO_TARGET_ENDIAN=$(if $(filter 1,$(CNO_BIG_ENDIAN)),big,little)' \
+    "$CNO_BUILDS_ROOT/packaging/openwrt/Makefile" \
+    || die 'OpenWrt package recipe must pass the asserted target byte order'
+grep -Fq -- '-DCNO_TARGET_FLOAT_ABI=$(CNO_TARGET_FLOAT_ABI)' \
+    "$CNO_BUILDS_ROOT/packaging/openwrt/Makefile" \
+    || die 'OpenWrt package recipe must pass the asserted floating-point ABI'
+grep -Fq 'NOT COMMAND _cno_assert_target_abi OR NOT CNO_TARGET_ABI_ASSERTIONS_OK' \
+    "$CNO_BUILDS_ROOT/packaging/openwrt/openwrt-project.cmake" \
+    || die 'OpenWrt CMake hook must reject cno-cli without ABI assertions'
+grep -Fq 'NOT CNO_TARGET_ENDIAN OR NOT CNO_TARGET_FLOAT_ABI' \
+    "$CNO_BUILDS_ROOT/packaging/openwrt/openwrt-project.cmake" \
+    || die 'OpenWrt CMake hook must require both target ABI values'
 
 work=$(make_temp_dir)
 trap 'rm -rf -- "$work"' EXIT HUP INT TERM
+
+# Resolve-default-branch tests use a fake curl executable and static GitHub API
+# fixtures.  They exercise annotated tag peeling, commit-derived versions,
+# ambiguity rejection, API failure propagation, and token forwarding without
+# relying on network access or the current state of cno-cli.
+head_fixture="$work/head-fixture"
+mkdir -p "$head_fixture/bin" "$head_fixture/json"
+cat > "$head_fixture/bin/curl" <<'EOF'
+#!/bin/sh
+set -eu
+
+output=
+url=
+while [ "$#" -gt 0 ]; do
+    case $1 in
+        -o)
+            [ "$#" -ge 2 ] || exit 2
+            output=$2
+            shift 2
+            ;;
+        -H)
+            [ "$#" -ge 2 ] || exit 2
+            printf '%s\n' "$2" >> "$FAKE_CURL_LOG"
+            shift 2
+            ;;
+        --retry)
+            [ "$#" -ge 2 ] || exit 2
+            shift 2
+            ;;
+        --fail|--location|--show-error|--silent|--retry-all-errors)
+            shift
+            ;;
+        http://*|https://*)
+            url=$1
+            shift
+            ;;
+        *)
+            printf 'fake curl: unexpected argument: %s\n' "$1" >&2
+            exit 2
+            ;;
+    esac
+done
+[ -n "$output" ] && [ -n "$url" ] || exit 2
+printf '%s\n' "$url" >> "$FAKE_CURL_LOG"
+
+case $url in
+    */repos/imzlh/cno-cli) fixture=repository.json ;;
+    */repos/imzlh/cno-cli/commits/main) fixture=commit.json ;;
+    */repos/imzlh/cno-cli/contents/package.json?ref=*) fixture=package-content.json ;;
+    */repos/imzlh/cno-cli/git/matching-refs/tags/v?*)
+        [ "$FAKE_GITHUB_MODE" != api-failure ] || exit 22
+        fixture="refs-$FAKE_GITHUB_MODE.json"
+        ;;
+    */repos/imzlh/cno-cli/git/tags/2222222222222222222222222222222222222222)
+        fixture=annotated-tag.json
+        ;;
+    *)
+        printf 'fake curl: unexpected URL: %s\n' "$url" >&2
+        exit 22
+        ;;
+esac
+cp "$FAKE_GITHUB_FIXTURES/$fixture" "$output"
+EOF
+chmod 0755 "$head_fixture/bin/curl"
+cat > "$head_fixture/json/repository.json" <<'EOF'
+{"default_branch":"main"}
+EOF
+cat > "$head_fixture/json/commit.json" <<'EOF'
+{
+  "sha":"1111111111111111111111111111111111111111",
+  "commit":{"committer":{"date":"2026-11-07T04:05:06Z"}}
+}
+EOF
+cat > "$head_fixture/json/package-content.json" <<'EOF'
+{"encoding":"base64","content":"eyJ2ZXJzaW9uIjoiMS4yLjMifQo="}
+EOF
+cat > "$head_fixture/json/annotated-tag.json" <<'EOF'
+{
+  "object":{
+    "type":"commit",
+    "sha":"1111111111111111111111111111111111111111"
+  }
+}
+EOF
+cat > "$head_fixture/json/refs-tagged.json" <<'EOF'
+[
+  {
+    "ref":"refs/tags/v1.2.3",
+    "object":{
+      "type":"tag",
+      "sha":"2222222222222222222222222222222222222222"
+    }
+  },
+  {
+    "ref":"refs/tags/v9.9.9",
+    "object":{
+      "type":"commit",
+      "sha":"3333333333333333333333333333333333333333"
+    }
+  },
+  {
+    "ref":"refs/tags/v1.2.3-rc.1",
+    "object":{
+      "type":"commit",
+      "sha":"1111111111111111111111111111111111111111"
+    }
+  }
+]
+EOF
+cat > "$head_fixture/json/refs-untagged.json" <<'EOF'
+[]
+EOF
+cat > "$head_fixture/json/refs-ambiguous.json" <<'EOF'
+[
+  {
+    "ref":"refs/tags/v1.2.3",
+    "object":{
+      "type":"commit",
+      "sha":"1111111111111111111111111111111111111111"
+    }
+  },
+  {
+    "ref":"refs/tags/v1.2.4",
+    "object":{
+      "type":"commit",
+      "sha":"1111111111111111111111111111111111111111"
+    }
+  }
+]
+EOF
+: > "$head_fixture/curl.log"
+
+tagged_head=$(
+    PATH="$head_fixture/bin:$PATH" \
+    GITHUB_API_URL=https://fixture.invalid \
+    GITHUB_TOKEN=fixture-token \
+    FAKE_GITHUB_MODE=tagged \
+    FAKE_GITHUB_FIXTURES="$head_fixture/json" \
+    FAKE_CURL_LOG="$head_fixture/curl.log" \
+    sh "$CNO_BUILDS_ROOT/scripts/resolve-cno-head.sh"
+)
+for expected in \
+    'tag=v1.2.3' \
+    'version=1.2.3' \
+    'base_version=1.2.3' \
+    'commit=1111111111111111111111111111111111111111' \
+    'commit_date=2026-11-07T04:05:06Z' \
+    'source_date_epoch=1794024306' \
+    'prerelease=false' \
+    'source_url=https://github.com/imzlh/cno-cli/commit/1111111111111111111111111111111111111111'
+do
+    printf '%s\n' "$tagged_head" | grep -Fx "$expected" >/dev/null \
+        || die "tagged HEAD output is missing: $expected"
+done
+grep -Fx 'Authorization: Bearer fixture-token' "$head_fixture/curl.log" >/dev/null \
+    || die 'HEAD resolver did not pass GITHUB_TOKEN to the GitHub API'
+
+untagged_head=$(
+    PATH="$head_fixture/bin:$PATH" \
+    GITHUB_API_URL=https://fixture.invalid \
+    FAKE_GITHUB_MODE=untagged \
+    FAKE_GITHUB_FIXTURES="$head_fixture/json" \
+    FAKE_CURL_LOG="$head_fixture/curl.log" \
+    sh "$CNO_BUILDS_ROOT/scripts/resolve-cno-head.sh"
+)
+for expected in \
+    'tag=' \
+    'version=1.2.3.1794024306.4803839602528529' \
+    'base_version=1.2.3' \
+    'prerelease=true'
+do
+    printf '%s\n' "$untagged_head" | grep -Fx "$expected" >/dev/null \
+        || die "untagged HEAD output is missing: $expected"
+done
+
+if PATH="$head_fixture/bin:$PATH" \
+    GITHUB_API_URL=https://fixture.invalid \
+    FAKE_GITHUB_MODE=ambiguous \
+    FAKE_GITHUB_FIXTURES="$head_fixture/json" \
+    FAKE_CURL_LOG="$head_fixture/curl.log" \
+    sh "$CNO_BUILDS_ROOT/scripts/resolve-cno-head.sh" >/dev/null 2>&1
+then
+    die 'HEAD resolver accepted two stable tags for the same commit'
+fi
+if PATH="$head_fixture/bin:$PATH" \
+    GITHUB_API_URL=https://fixture.invalid \
+    FAKE_GITHUB_MODE=api-failure \
+    FAKE_GITHUB_FIXTURES="$head_fixture/json" \
+    FAKE_CURL_LOG="$head_fixture/curl.log" \
+    sh "$CNO_BUILDS_ROOT/scripts/resolve-cno-head.sh" >/dev/null 2>&1
+then
+    die 'HEAD resolver swallowed a GitHub API failure'
+fi
+
 mkdir -p "$work/payload/ext" "$work/payload/lib" "$work/out-a" "$work/out-b"
 cat > "$work/payload/cno" <<'EOF'
 #!/bin/sh
@@ -173,9 +380,13 @@ awk -F '\t' '!/^#/ && NF { print $1, $2, $3 }' "$CNO_BUILDS_ROOT/config/openwrt-
         esac
     done
 sh "$CNO_BUILDS_ROOT/scripts/collect-release.sh" \
-    "$release_input" "$release_output" 1.2.3
+    "$release_input" "$release_output" 1.2.3 \
+    1111111111111111111111111111111111111111 \
+    https://github.com/imzlh/cno-cli/commit/1111111111111111111111111111111111111111
 [ -s "$release_output/SHA256SUMS.txt" ]
 [ -s "$release_output/RELEASE-INFO.txt" ]
+grep -Fx 'source commit: 1111111111111111111111111111111111111111' \
+    "$release_output/RELEASE-INFO.txt" >/dev/null
 
 printf '[check] shell, matrices, reproducible Debian fixture and release set passed\n'
 

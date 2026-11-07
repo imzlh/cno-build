@@ -54,7 +54,7 @@ sed \
     "$CNO_BUILDS_ROOT/packaging/alpine/APKBUILD.in" > "$package_dir/APKBUILD"
 
 export PACKAGER="$CNO_MAINTAINER_NAME <$CNO_MAINTAINER_EMAIL>"
-export SOURCE_DATE_EPOCH=$source_date_epoch
+export SOURCE_DATE_EPOCH="$source_date_epoch"
 if [ -n "${ABUILD_PRIVATE_KEY:-}" ]; then
     [ -f "$ABUILD_PRIVATE_KEY" ] || die "ABUILD_PRIVATE_KEY does not exist: $ABUILD_PRIVATE_KEY"
     private_key="$abuild_config_dir/$(basename -- "$ABUILD_PRIVATE_KEY")"

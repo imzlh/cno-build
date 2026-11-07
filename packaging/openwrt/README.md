@@ -27,6 +27,7 @@ CNO_OXC_ARCHIVE           target Rust staticlib produced per matrix row
 CNO_OXC_SHA256            SHA-256 of the Rust staticlib
 CNO_QEMU                  qemu-user executable for this target
 CNO_BIG_ENDIAN            1 only for big-endian targets
+CNO_TARGET_FLOAT_ABI      explicit none, soft, or hard calling ABI assertion
 CNO_WASM                  ON or OFF
 CNO_WAMR_TARGET           WAMR target such as AARCH64 or ARMV7_VFP
 CNO_OPENWRT_DEPENDS       optional exact dependency expression for this SDK

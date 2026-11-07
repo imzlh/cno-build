@@ -1,36 +1,46 @@
 name: Build system packages
 
 on:
+  push:
+    branches: [master]
   workflow_dispatch:
     inputs:
-      cno_release:
-        description: cno release tag/version, or latest
-        type: string
-        default: latest
-        required: true
+      force:
+        description: Rebuild even when this cno-cli commit was released successfully
+        type: boolean
+        default: false
       publish:
         description: Publish the package set as a GitHub Release
         type: boolean
         default: true
   repository_dispatch:
-    types: [cno-release]
+    types: [cno-head]
 
 permissions:
   contents: read
 
+# A single lane prevents two cno-build pushes from racing to publish the same
+# immutable cno-cli HEAD. A failed run leaves no success marker, so a later
+# push retries it.
 concurrency:
-  group: packages-${{ github.event.client_payload.tag || inputs.cno_release || 'latest' }}
+  group: packages-cno-head
   cancel-in-progress: false
 
 jobs:
   prepare:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
+    permissions:
+      contents: read
     outputs:
-      tag: ${{ steps.release.outputs.tag }}
-      version: ${{ steps.release.outputs.version }}
-      commit: ${{ steps.release.outputs.commit }}
-      source_date_epoch: ${{ steps.release.outputs.source_date_epoch }}
+      build: ${{ steps.decision.outputs.build }}
+      tag: ${{ steps.source.outputs.tag }}
+      version: ${{ steps.source.outputs.version }}
+      commit: ${{ steps.source.outputs.commit }}
+      source_date_epoch: ${{ steps.source.outputs.source_date_epoch }}
+      source_url: ${{ steps.source.outputs.source_url }}
+      prerelease: ${{ steps.source.outputs.prerelease }}
+      release_tag: ${{ steps.decision.outputs.release_tag }}
       openwrt_ipk_release: ${{ steps.openwrt.outputs.release }}
       package_release: ${{ steps.package.outputs.release }}
       debian_matrix: ${{ steps.matrix.outputs.debian }}
@@ -39,50 +49,107 @@ jobs:
       publish: ${{ steps.mode.outputs.publish }}
     steps:
       - uses: actions/checkout@v4
-      - id: release
-        name: Resolve immutable cno release
+      - id: source
+        name: Resolve immutable cno-cli HEAD
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          REQUESTED_RELEASE: ${{ github.event.client_payload.tag || inputs.cno_release || 'latest' }}
         run: |
-          sh scripts/resolve-cno-release.sh "$REQUESTED_RELEASE" > release.outputs
-          cat release.outputs
-          cat release.outputs >> "$GITHUB_OUTPUT"
-      - id: openwrt
-        name: Resolve latest OpenWrt IPK patch release
-        run: echo "release=$(sh scripts/resolve-openwrt-release.sh)" >> "$GITHUB_OUTPUT"
+          sh scripts/resolve-cno-head.sh > source.outputs
+          cat source.outputs
+          cat source.outputs >> "$GITHUB_OUTPUT"
       - id: package
         name: Read package revision
         run: |
           . config/project.env
           echo "release=$CNO_PACKAGE_RELEASE" >> "$GITHUB_OUTPUT"
-      - id: matrix
-        name: Generate package matrices from configuration
-        run: |
-          echo "debian=$(sh scripts/config-matrix.sh debian)" >> "$GITHUB_OUTPUT"
-          echo "alpine=$(sh scripts/config-matrix.sh alpine)" >> "$GITHUB_OUTPUT"
-          echo "openwrt=$(sh scripts/config-matrix.sh openwrt)" >> "$GITHUB_OUTPUT"
       - id: mode
         name: Resolve publication mode
         env:
           DISPATCH_PUBLISH: ${{ github.event.client_payload.publish }}
           MANUAL_PUBLISH: ${{ inputs.publish }}
         run: |
-          if [ "${{ github.event_name }}" = repository_dispatch ]; then
-            case "$DISPATCH_PUBLISH" in false) publish=false ;; *) publish=true ;; esac
-          else
-            publish=${MANUAL_PUBLISH:-false}
-          fi
+          case '${{ github.event_name }}' in
+            push) publish=true ;;
+            repository_dispatch)
+              case "$DISPATCH_PUBLISH" in false) publish=false ;; *) publish=true ;; esac
+              ;;
+            *) publish=${MANUAL_PUBLISH:-true} ;;
+          esac
           echo "publish=$publish" >> "$GITHUB_OUTPUT"
+      - id: decision
+        name: Skip only an already successful source commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_COMMIT: ${{ steps.source.outputs.commit }}
+          VERSION: ${{ steps.source.outputs.version }}
+          PACKAGE_RELEASE: ${{ steps.package.outputs.release }}
+          MANUAL_FORCE: ${{ inputs.force }}
+          DISPATCH_FORCE: ${{ github.event.client_payload.force }}
+        run: |
+          release_tag="packages-v${VERSION}-r${PACKAGE_RELEASE}"
+          echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
 
-  openwrt-source:
-    name: Prepare immutable OpenWrt source
+          force=false
+          case '${{ github.event_name }}' in
+            workflow_dispatch) force=${MANUAL_FORCE:-false} ;;
+            repository_dispatch) force=${DISPATCH_FORCE:-false} ;;
+          esac
+          if [ "$force" = true ]; then
+            echo 'build=true' >> "$GITHUB_OUTPUT"
+            echo 'Forced rebuild requested.'
+            exit 0
+          fi
+
+          marker="cno-source-commit: $SOURCE_COMMIT"
+          found=false
+          page=1
+          while :; do
+            response=$(curl --fail --location --show-error --silent \
+              --retry 3 --retry-all-errors \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2022-11-28' \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/releases?per_page=100&page=$page")
+            count=$(printf '%s' "$response" | jq 'length')
+            if printf '%s' "$response" | jq -e --arg marker "$marker" \
+              'any(.[]; .draft == false and ((.body // "") | split("\n") | index($marker)))' \
+              >/dev/null
+            then
+              found=true
+              break
+            fi
+            [ "$count" -eq 100 ] || break
+            page=$((page + 1))
+          done
+
+          if [ "$found" = true ]; then
+            echo 'build=false' >> "$GITHUB_OUTPUT"
+            echo "cno-cli $SOURCE_COMMIT was already released successfully; skipping."
+          else
+            echo 'build=true' >> "$GITHUB_OUTPUT"
+            echo "No successful release marker for $SOURCE_COMMIT; building."
+          fi
+      - id: openwrt
+        if: steps.decision.outputs.build == 'true'
+        name: Resolve latest OpenWrt IPK patch release
+        run: echo "release=$(sh scripts/resolve-openwrt-release.sh)" >> "$GITHUB_OUTPUT"
+      - id: matrix
+        if: steps.decision.outputs.build == 'true'
+        name: Generate package matrices from configuration
+        run: |
+          echo "debian=$(sh scripts/config-matrix.sh debian)" >> "$GITHUB_OUTPUT"
+          echo "alpine=$(sh scripts/config-matrix.sh alpine)" >> "$GITHUB_OUTPUT"
+          echo "openwrt=$(sh scripts/config-matrix.sh openwrt)" >> "$GITHUB_OUTPUT"
+
+  source:
+    name: Prepare immutable cno-cli source
     needs: prepare
+    if: needs.prepare.outputs.build == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
-      - name: Check out immutable cno source with submodules
+      - name: Check out immutable cno-cli source with submodules
         uses: actions/checkout@v4
         with:
           repository: imzlh/cno-cli
@@ -97,25 +164,129 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-      - name: Bundle JavaScript and archive tracked source
+      - name: Inject package version, apply packaging patch, bundle and archive
         run: |
           actual=$(git -C work/cno-cli rev-parse HEAD)
           test "$actual" = '${{ needs.prepare.outputs.commit }}'
           sh scripts/prepare-openwrt-source.sh work/cno-cli "$actual" \
-            '${{ needs.prepare.outputs.version }}' work/openwrt-source \
-            '${{ needs.prepare.outputs.source_date_epoch }}'
+            '${{ needs.prepare.outputs.version }}' work/cno-source \
+            '${{ needs.prepare.outputs.source_date_epoch }}' \
+            patches/cno-cli-openwrt-cross-abi.patch
       - uses: actions/upload-artifact@v4
         with:
-          name: cno-openwrt-source-${{ needs.prepare.outputs.commit }}
-          path: work/openwrt-source/
+          name: cno-source-${{ needs.prepare.outputs.commit }}
+          path: work/cno-source/
           if-no-files-found: error
-          # With 38 SDK jobs capped at six in parallel, the final batch can
-          # start more than a day after this shared artifact is prepared.
           retention-days: 3
+
+  linux-input:
+    name: Linux input ${{ matrix.libc }} ${{ matrix.target }}
+    needs: [prepare, source]
+    if: needs.prepare.outputs.build == 'true'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {libc: glibc-minimal, target: x86_64, platform: linux/amd64, image: 'debian:bookworm-slim', runner: ubuntu-24.04}
+          - {libc: glibc-minimal, target: i386, platform: linux/386, image: 'debian:bookworm-slim', runner: ubuntu-24.04}
+          - {libc: glibc-minimal, target: arm64, platform: linux/arm64, image: 'debian:bookworm-slim', runner: ubuntu-24.04-arm}
+          - {libc: glibc-minimal, target: armv7, platform: linux/arm/v7, image: 'debian:bookworm-slim', runner: ubuntu-24.04-arm}
+          - {libc: musl-dynamic, target: x86_64, platform: linux/amd64, image: 'alpine:3.21', runner: ubuntu-24.04}
+          - {libc: musl-dynamic, target: i386, platform: linux/386, image: 'alpine:3.21', runner: ubuntu-24.04}
+          - {libc: musl-dynamic, target: arm64, platform: linux/arm64, image: 'alpine:3.21', runner: ubuntu-24.04-arm}
+          - {libc: musl-dynamic, target: armv7, platform: linux/arm/v7, image: 'alpine:3.21', runner: ubuntu-24.04-arm}
+          - {libc: musl-dynamic, target: armv6, platform: linux/arm/v6, image: 'alpine:3.21', runner: ubuntu-24.04-arm}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: cno-source-${{ needs.prepare.outputs.commit }}
+          path: work/cno-source
+      - name: Unpack the exact versioned source
+        run: |
+          mkdir work/cno-cli
+          tar -xzf 'work/cno-source/cno-source-${{ needs.prepare.outputs.version }}.tar.gz' \
+            --strip-components=1 -C work/cno-cli
+          mkdir -p work/cno-cli/dist
+          cp 'work/cno-source/cno-cli-${{ needs.prepare.outputs.version }}.min.js' \
+            work/cno-cli/dist/cno-cli.min.js
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build OXC Rust archive on the runner
+        working-directory: work/cno-cli
+        env:
+          CNO_OXC_RUST_TOOLCHAIN: 1.95.0
+        run: |
+          sh scripts/ci/oxc/build-linux.sh --prepare \
+            '${{ startsWith(matrix.libc, 'glibc') && 'glibc' || 'musl' }}' \
+            '${{ matrix.target }}' build-oxc-rust
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm,arm64,386
+      - name: Build archive inside the target platform
+        env:
+          LIBC: ${{ matrix.libc }}
+          TARGET: ${{ matrix.target }}
+          PLATFORM: ${{ matrix.platform }}
+          IMAGE: ${{ matrix.image }}
+        run: |
+          docker run --rm --platform "$PLATFORM" \
+            -v "$GITHUB_WORKSPACE/work/cno-cli:/work" -w /work \
+            -e CMAKE_BUILD_PARALLEL_LEVEL=4 \
+            -e CNO_OXC_RUST_ARCHIVE=/work/build-oxc-rust/libcjs_oxc_core.a \
+            "$IMAGE" sh scripts/ci/linux/build.sh "$LIBC" "$TARGET" false
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cno-linux-${{ matrix.libc }}-${{ matrix.target }}-${{ needs.prepare.outputs.commit }}
+          path: work/cno-cli/artifacts/*.tar.gz
+          if-no-files-found: error
+
+  linux-input-cross:
+    name: Linux input musl-dynamic riscv64
+    needs: [prepare, source]
+    if: needs.prepare.outputs.build == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: cno-source-${{ needs.prepare.outputs.commit }}
+          path: work/cno-source
+      - name: Unpack the exact versioned source
+        run: |
+          mkdir work/cno-cli
+          tar -xzf 'work/cno-source/cno-source-${{ needs.prepare.outputs.version }}.tar.gz' \
+            --strip-components=1 -C work/cno-cli
+          mkdir -p work/cno-cli/dist
+          cp 'work/cno-source/cno-cli-${{ needs.prepare.outputs.version }}.min.js' \
+            work/cno-cli/dist/cno-cli.min.js
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install cross-build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build pkg-config curl ca-certificates \
+            zip unzip tar xz-utils autoconf automake libtool perl bison flex \
+            qemu-user
+      - name: Build dynamic musl archive
+        working-directory: work/cno-cli
+        env:
+          CNO_RUN_TESTS: 'false'
+          CNO_STATIC_LINK: 'false'
+          CMAKE_BUILD_PARALLEL_LEVEL: '4'
+        run: bash scripts/ci/linux/cross.sh riscv64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cno-linux-musl-dynamic-riscv64-${{ needs.prepare.outputs.commit }}
+          path: work/cno-cli/artifacts/cno-linux-musl-dynamic-riscv64.tar.gz
+          if-no-files-found: error
 
   deb:
     name: DEB ${{ matrix.deb_arch }}
-    needs: prepare
+    needs: [prepare, linux-input]
+    if: needs.prepare.outputs.build == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
@@ -124,11 +295,10 @@ jobs:
         include: ${{ fromJSON(needs.prepare.outputs.debian_matrix) }}
     steps:
       - uses: actions/checkout@v4
-      - name: Download and verify upstream archive
-        run: |
-          sh scripts/fetch-cno-asset.sh '${{ needs.prepare.outputs.tag }}' \
-            'cno-linux-minimal-${{ matrix.cno_target }}.tar.gz' \
-            'downloads/cno-linux-minimal-${{ matrix.cno_target }}.tar.gz'
+      - uses: actions/download-artifact@v4
+        with:
+          name: cno-linux-glibc-minimal-${{ matrix.cno_target }}-${{ needs.prepare.outputs.commit }}
+          path: downloads
       - name: Build Debian package
         run: |
           sh scripts/build-deb.sh '${{ needs.prepare.outputs.version }}' \
@@ -159,7 +329,8 @@ jobs:
 
   alpine:
     name: Alpine APK ${{ matrix.alpine_arch }}
-    needs: prepare
+    needs: [prepare, linux-input, linux-input-cross]
+    if: ${{ always() && needs.prepare.outputs.build == 'true' && needs.linux-input.result == 'success' && needs.linux-input-cross.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     strategy:
@@ -168,14 +339,13 @@ jobs:
         include: ${{ fromJSON(needs.prepare.outputs.alpine_matrix) }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: cno-linux-musl-dynamic-${{ matrix.cno_target }}-${{ needs.prepare.outputs.commit }}
+          path: downloads
       - uses: docker/setup-qemu-action@v3
         with:
           platforms: all
-      - name: Download and verify upstream archive
-        run: |
-          sh scripts/fetch-cno-asset.sh '${{ needs.prepare.outputs.tag }}' \
-            'cno-linux-musl-dynamic-${{ matrix.cno_target }}.tar.gz' \
-            'downloads/cno-linux-musl-dynamic-${{ matrix.cno_target }}.tar.gz'
       - name: Build signed Alpine package on target architecture
         env:
           PLATFORM: ${{ matrix.platform }}
@@ -237,6 +407,7 @@ jobs:
   deb-ubuntu:
     name: Ubuntu DEB ${{ matrix.deb_arch }}
     needs: [prepare, deb]
+    if: needs.prepare.outputs.build == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
@@ -268,7 +439,8 @@ jobs:
 
   openwrt:
     name: OpenWrt ${{ matrix.format }} ${{ matrix.target }}/${{ matrix.subtarget }}
-    needs: [prepare, openwrt-source]
+    needs: [prepare, source]
+    if: needs.prepare.outputs.build == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 240
     strategy:
@@ -280,8 +452,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          name: cno-openwrt-source-${{ needs.prepare.outputs.commit }}
-          path: work/openwrt-source
+          name: cno-source-${{ needs.prepare.outputs.commit }}
+          path: work/cno-source
       - name: Install OpenWrt SDK host tools
         run: |
           sudo apt-get update
@@ -319,8 +491,8 @@ jobs:
             "$RUST_TARGET" "$RUST_CPU" "$RUST_FEATURES" \
             "$EMULATOR" "$WAMR_TARGET" "$WASM" \
             "$MACHINE_REGEX" "$VERSION" "$SOURCE_COMMIT" \
-            "work/openwrt-source/cno-source-$VERSION.tar.gz" \
-            "work/openwrt-source/cno-cli-$VERSION.min.js" \
+            "work/cno-source/cno-source-$VERSION.tar.gz" \
+            "work/cno-source/cno-cli-$VERSION.min.js" \
             "dist/openwrt/$FORMAT/$TARGET-$SUBTARGET"
       - uses: actions/upload-artifact@v4
         with:
@@ -333,10 +505,8 @@ jobs:
   release:
     name: Assemble and publish
     needs: [prepare, deb, deb-ubuntu, alpine, openwrt]
+    if: ${{ always() && needs.prepare.outputs.build == 'true' && needs.deb.result == 'success' && needs.deb-ubuntu.result == 'success' && needs.alpine.result == 'success' && needs.openwrt.result == 'success' }}
     runs-on: ubuntu-24.04
-    # This downloads and republishes 38 OpenWrt artifacts plus Debian and
-    # Alpine packages; OXC makes the aggregate substantially larger than the
-    # old generic-binary package set.
     timeout-minutes: 45
     permissions:
       contents: write
@@ -348,20 +518,24 @@ jobs:
           pattern: packages-*
       - name: Assemble checksummed package set
         run: |
-          sh scripts/collect-release.sh incoming release '${{ needs.prepare.outputs.version }}'
+          sh scripts/collect-release.sh incoming release \
+            '${{ needs.prepare.outputs.version }}' \
+            '${{ needs.prepare.outputs.commit }}' \
+            '${{ needs.prepare.outputs.source_url }}'
           find release -maxdepth 1 -type f -printf '%f\n' | sort
       - uses: actions/upload-artifact@v4
         with:
           name: cno-system-packages-${{ needs.prepare.outputs.version }}-r${{ needs.prepare.outputs.package_release }}
           path: release/
           if-no-files-found: error
-      - name: Publish GitHub Release
+      - name: Create or update GitHub Release assets
         if: needs.prepare.outputs.publish == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: packages-v${{ needs.prepare.outputs.version }}-r${{ needs.prepare.outputs.package_release }}
+          tag_name: ${{ needs.prepare.outputs.release_tag }}
           name: cno ${{ needs.prepare.outputs.version }} system packages (r${{ needs.prepare.outputs.package_release }})
           target_commitish: ${{ github.sha }}
+          prerelease: ${{ needs.prepare.outputs.prerelease }}
           generate_release_notes: true
           fail_on_unmatched_files: true
           files: |
@@ -372,4 +546,31 @@ jobs:
             release/*.buildinfo
             release/SHA256SUMS.txt
             release/RELEASE-INFO.txt
-
+      - name: Mark source commit as successfully released
+        if: needs.prepare.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+          SOURCE_COMMIT: ${{ needs.prepare.outputs.commit }}
+        run: |
+          release=$(curl --fail --location --show-error --silent \
+            --retry 3 --retry-all-errors \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/releases/tags/$RELEASE_TAG")
+          release_id=$(printf '%s' "$release" | jq -er .id)
+          body=$(printf '%s' "$release" | jq -r '.body // ""')
+          marker="cno-source-commit: $SOURCE_COMMIT"
+          if ! printf '%s\n' "$body" | grep -Fx "$marker" >/dev/null; then
+            body=$(printf '%s\n\n%s\n' "$body" "$marker")
+            jq -n --arg body "$body" '{body: $body}' > marker.json
+            curl --fail --location --show-error --silent \
+              --retry 3 --retry-all-errors -X PATCH \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2022-11-28' \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H 'Content-Type: application/json' \
+              --data-binary @marker.json \
+              "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/releases/$release_id" >/dev/null
+          fi

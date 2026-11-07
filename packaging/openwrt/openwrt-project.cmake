@@ -6,6 +6,20 @@ if(NOT CMAKE_CROSSCOMPILING)
     message(FATAL_ERROR "The OpenWrt cno package must be cross-compiled by an SDK")
 endif()
 
+# CMake merely warns when an unknown -D variable is never consumed.  Require
+# the sibling cno-cli ABI assertion patch to have run before this nested cjs
+# project, otherwise ENDIAN/FLOAT_ABI labels could diverge from the compiler.
+if(NOT COMMAND _cno_assert_target_abi OR NOT CNO_TARGET_ABI_ASSERTIONS_OK)
+    message(FATAL_ERROR
+        "cno-cli target ABI assertions are missing; apply "
+        "cno-cli-openwrt-cross-abi.patch before packaging")
+endif()
+if(NOT CNO_TARGET_ENDIAN OR NOT CNO_TARGET_FLOAT_ABI)
+    message(FATAL_ERROR
+        "OpenWrt packaging requires explicit CNO_TARGET_ENDIAN and "
+        "CNO_TARGET_FLOAT_ABI assertions")
+endif()
+
 # Do not let a developer's host package registry or environment leak into a
 # target build.  OpenWrt's toolchain file supplies the target staging roots.
 set(CMAKE_FIND_USE_PACKAGE_REGISTRY FALSE)

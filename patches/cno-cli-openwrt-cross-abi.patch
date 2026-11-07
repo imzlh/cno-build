@@ -1,0 +1,79 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index f3f2f37..0000000 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -4,6 +4,74 @@ project(cno-cli LANGUAGES C)
+ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+ include(ExternalProject)
+ 
++# Cross packages must be built by the target SDK/toolchain.  These optional
++# assertions let packagers record the ABI they selected and fail during CMake
++# configure if a wrapper accidentally supplies a compiler for another ABI.
++# They do not add -march/-mfloat-abi flags: the SDK remains authoritative for
++# CPU tuning, sysroot, libc, compiler runtime and linker search paths.
++set(CNO_TARGET_ENDIAN "" CACHE STRING "Assert target byte order: little or big")
++set_property(CACHE CNO_TARGET_ENDIAN PROPERTY STRINGS "" little big)
++set(CNO_TARGET_FLOAT_ABI "" CACHE STRING "Assert target floating-point calling ABI: none, soft or hard")
++set_property(CACHE CNO_TARGET_FLOAT_ABI PROPERTY STRINGS "" none soft hard)
++set(CNO_TARGET_ABI_ASSERTIONS_OK OFF CACHE INTERNAL
++    "Whether cno target ABI assertions ran successfully" FORCE)
++
++function(_cno_assert_target_abi)
++    if(NOT CMAKE_CROSSCOMPILING)
++        if(CNO_TARGET_ENDIAN OR CNO_TARGET_FLOAT_ABI)
++            message(FATAL_ERROR
++                "CNO_TARGET_ENDIAN/CNO_TARGET_FLOAT_ABI are cross-build assertions; "
++                "configure with a target toolchain file")
++        endif()
++        return()
++    endif()
++
++    string(TOLOWER "${CNO_TARGET_ENDIAN}" _cno_endian)
++    if(_cno_endian AND NOT _cno_endian MATCHES "^(little|big)$")
++        message(FATAL_ERROR "CNO_TARGET_ENDIAN must be little or big")
++    endif()
++    string(TOLOWER "${CNO_TARGET_FLOAT_ABI}" _cno_float_abi)
++    if(_cno_float_abi AND NOT _cno_float_abi MATCHES "^(none|soft|hard)$")
++        message(FATAL_ERROR "CNO_TARGET_FLOAT_ABI must be none, soft or hard")
++    endif()
++
++    if(NOT _cno_endian AND NOT _cno_float_abi)
++        return()
++    endif()
++
++    set(_cno_probe "")
++    if(_cno_endian STREQUAL "little")
++        string(APPEND _cno_probe
++            "#if !defined(__BYTE_ORDER__) || __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__\n#error expected little-endian target\n#endif\n")
++    elseif(_cno_endian STREQUAL "big")
++        string(APPEND _cno_probe
++            "#if !defined(__BYTE_ORDER__) || __BYTE_ORDER__ != __ORDER_BIG_ENDIAN__\n#error expected big-endian target\n#endif\n")
++    endif()
++    if(_cno_float_abi STREQUAL "soft")
++        string(APPEND _cno_probe
++            "#if defined(__arm__)\n#if defined(__ARM_PCS_VFP)\n#error expected ARM base PCS (soft/softfp calling ABI)\n#endif\n#elif defined(__mips__)\n#if !defined(__mips_soft_float) || defined(__mips_hard_float)\n#error expected MIPS soft-float ABI\n#endif\n#else\n#error soft float ABI assertion supports only ARM and MIPS targets\n#endif\n")
++    elseif(_cno_float_abi STREQUAL "hard")
++        string(APPEND _cno_probe
++            "#if defined(__arm__)\n#if !defined(__ARM_PCS_VFP)\n#error expected ARM VFP PCS (hard-float calling ABI)\n#endif\n#elif defined(__mips__)\n#if !defined(__mips_hard_float) || defined(__mips_soft_float)\n#error expected MIPS hard-float ABI\n#endif\n#else\n#error hard float ABI assertion supports only ARM and MIPS targets\n#endif\n")
++    elseif(_cno_float_abi STREQUAL "none")
++        string(APPEND _cno_probe
++            "#if defined(__arm__) || defined(__mips__)\n#error ARM and MIPS targets require an explicit soft or hard float ABI\n#endif\n")
++    endif()
++    string(APPEND _cno_probe "int main(void) { return 0; }\n")
++
++    include(CheckCSourceCompiles)
++    unset(CNO_TARGET_ABI_MATCHES CACHE)
++    check_c_source_compiles("${_cno_probe}" CNO_TARGET_ABI_MATCHES)
++    if(NOT CNO_TARGET_ABI_MATCHES)
++        message(FATAL_ERROR
++            "The selected compiler/flags do not match target ABI: "
++            "endian=${_cno_endian}, float=${_cno_float_abi}")
++    endif()
++    set(CNO_TARGET_ABI_ASSERTIONS_OK ON CACHE INTERNAL
++        "Whether cno target ABI assertions ran successfully" FORCE)
++endfunction()
++_cno_assert_target_abi()
++
+ # Startup cost is dominated by decoding the embedded bytecode blob, which has no
+ # lazy path, so bundle size matters: minify by default in release builds.
+ if(CNO_RELEASE)

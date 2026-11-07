@@ -3,16 +3,17 @@ set -eu
 
 usage() {
     printf '%s\n' \
-        'Usage: prepare-openwrt-source.sh SOURCE_DIR EXPECTED_COMMIT VERSION OUTPUT_DIR SOURCE_DATE_EPOCH' >&2
+        'Usage: prepare-openwrt-source.sh SOURCE_DIR EXPECTED_COMMIT VERSION OUTPUT_DIR SOURCE_DATE_EPOCH [SOURCE_PATCH]' >&2
     exit 2
 }
 
-[ "$#" -eq 5 ] || usage
+[ "$#" -ge 5 ] && [ "$#" -le 6 ] || usage
 source_dir=$1
 expected_commit=$2
 version=$3
 output_dir=$4
 source_date_epoch=$5
+source_patch=${6:-}
 
 case $expected_commit in *[!0-9a-fA-F]*|'') printf 'invalid commit: %s\n' "$expected_commit" >&2; exit 2 ;; esac
 [ "${#expected_commit}" -eq 40 ] || { printf 'commit must contain 40 hex characters\n' >&2; exit 2; }
@@ -20,12 +21,16 @@ case $version in *[!0-9A-Za-z.+~-]*|'') printf 'invalid version: %s\n' "$version
 case $source_date_epoch in *[!0-9]*|'') printf 'invalid SOURCE_DATE_EPOCH: %s\n' "$source_date_epoch" >&2; exit 2 ;; esac
 [ -d "$source_dir/.git" ] || { printf 'not a Git checkout: %s\n' "$source_dir" >&2; exit 1; }
 
-for command_name in git pnpm curl sha256sum tar gzip; do
+for command_name in git pnpm curl jq sha256sum tar gzip; do
     command -v "$command_name" >/dev/null 2>&1 || {
         printf 'required command not found: %s\n' "$command_name" >&2
         exit 1
     }
 done
+[ -z "$source_patch" ] || [ -f "$source_patch" ] || {
+    printf 'source patch not found: %s\n' "$source_patch" >&2
+    exit 1
+}
 
 source_dir=$(CDPATH= cd -- "$source_dir" && pwd)
 actual_commit=$(git -C "$source_dir" rev-parse --verify HEAD)
@@ -98,6 +103,27 @@ git -C "$source_dir" ls-files -z --recurse-submodules > "$tracked_files"
 tar -C "$source_dir" --null --no-recursion -T "$tracked_files" -cf "$tracked_tar"
 tar -C "$payload" -xf "$tracked_tar"
 
+# Packaging-only cross-ABI assertions are maintained as an explicit upstream
+# patch. Apply them to this temporary immutable source payload; never mutate
+# the sibling cno-cli checkout.
+source_patch_sha256=none
+if [ -n "$source_patch" ]; then
+    source_patch=$(CDPATH= cd -- "$(dirname -- "$source_patch")" && pwd)/$(basename -- "$source_patch")
+    (
+        cd "$payload"
+        git apply --no-index --check "$source_patch"
+        git apply --no-index "$source_patch"
+    )
+    source_patch_sha256=$(sha256sum "$source_patch" | awk '{print $1}')
+fi
+
+# Runtime and package versions must agree for untagged HEAD builds. The root
+# pnpm lockfile does not record the importer version, so this does not alter
+# dependency resolution or require a lockfile rewrite.
+jq --arg version "$version" '.version = $version' "$payload/package.json" \
+    > "$work/package.json"
+mv "$work/package.json" "$payload/package.json"
+
 # circu.js otherwise downloads llhttp during CMake configure.  Vendor one
 # immutable upstream release into the source payload and verify it first.
 llhttp_url=https://github.com/nodejs/llhttp/archive/refs/tags/release/v9.3.0.tar.gz
@@ -108,27 +134,34 @@ printf '%s  %s\n' "$llhttp_sha256" "$work/llhttp.tar.gz" | sha256sum -c -
 mkdir -p "$payload/vendor/llhttp"
 tar -xzf "$work/llhttp.tar.gz" --strip-components=1 -C "$payload/vendor/llhttp"
 
-# Generate JavaScript on the host, but keep it separate from the source tar.
-# The SDK will still build and execute its own target cjsc to create bytecode.
+# Generate JavaScript from the patched, version-injected payload on the host,
+# but keep the bundle separate from the source tar. The SDK will still build
+# and execute its own target cjsc to create target-native bytecode.
 polyfill_commit=$(git -C "$source_dir/cno" rev-parse --verify HEAD)
 printf '%s\n' "$polyfill_commit" | grep -Eq '^[0-9a-fA-F]{40}$' || {
     printf 'invalid cno submodule commit: %s\n' "$polyfill_commit" >&2
     exit 1
 }
 (
-    cd "$source_dir"
+    cd "$payload"
     pnpm install --frozen-lockfile
     pnpm --dir cno install --frozen-lockfile
     pnpm --dir cts install --frozen-lockfile
     CNO_POLYFILL_REVISION="$polyfill_commit" \
         CNO_BUNDLE_OUTFILE="$work/cno-cli.min.js" pnpm run bundle:js:min
 )
+# Dependency trees are build inputs fetched from the committed lockfiles, not
+# source payload. Keep the archive limited to tracked source plus the explicit
+# packaging patch, injected version, and vendored llhttp.
+rm -rf -- "$payload/node_modules" "$payload/cno/node_modules" \
+    "$payload/cts/node_modules" "$payload/http/node_modules"
 
 cat > "$payload/OPENWRT-SOURCE-INFO.txt" <<EOF
 cno_commit=$actual_commit
 cno_polyfill_commit=$polyfill_commit
 cno_version=$version
 source_date_epoch=$source_date_epoch
+cno_source_patch_sha256=$source_patch_sha256
 llhttp_url=$llhttp_url
 llhttp_sha256=$llhttp_sha256
 EOF

@@ -168,6 +168,7 @@ sdk_make() {
             CNO_OXC_SHA256="$oxc_sha256" \
             CNO_QEMU="$emulator" \
             CNO_BIG_ENDIAN="$([ "$endian" = big ] && printf 1 || printf 0)" \
+            CNO_TARGET_FLOAT_ABI="$float_abi" \
             CNO_WASM="$wasm" \
             CNO_WAMR_TARGET="$wamr_target" \
             "$@"
