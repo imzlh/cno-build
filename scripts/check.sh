@@ -44,11 +44,17 @@ awk -F '\t' '
         print FILENAME ":" FNR ": invalid OpenWrt formats field: " $1 > "/dev/stderr"
         bad=1
     }
-    ($2 SUBSEP $3) in target_seen {
-        print FILENAME ":" FNR ": duplicate OpenWrt target/subtarget: " $2 "/" $3 > "/dev/stderr"
-        bad=1
+    {
+        count=split($1, formats, "+")
+        for (i=1; i<=count; i++) {
+            key=formats[i] SUBSEP $2 SUBSEP $3
+            if (key in job_seen) {
+                print FILENAME ":" FNR ": duplicate OpenWrt job: " formats[i] " " $2 "/" $3 > "/dev/stderr"
+                bad=1
+            }
+            job_seen[key]=1
+        }
     }
-    { target_seen[$2 SUBSEP $3]=1 }
     END { exit bad }
 ' "$CNO_BUILDS_ROOT/config/openwrt-targets.tsv"
 

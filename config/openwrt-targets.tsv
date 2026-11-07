@@ -19,4 +19,5 @@ ipk+apk	ath79	generic	mips_24kc	mips-24kc	big	soft	mips-unknown-linux-musl	mips3
 ipk+apk	ramips	mt7620	mipsel_24kc	mips-24kc	little	soft	mipsel-unknown-linux-musl	mips32r2	default	qemu-mipsel	MIPS	OFF	MIPS
 ipk+apk	ramips	rt3883	mipsel_74kc	mips-74kc	little	soft	mipsel-unknown-linux-musl	mips32r2	default	qemu-mipsel	MIPS	OFF	MIPS
 ipk+apk	ramips	mt7621	mipsel_24kc	mips-1004kc	little	soft	mipsel-unknown-linux-musl	mips32r2	default	qemu-mipsel	MIPS	OFF	MIPS
-ipk+apk	sifiveu	generic	riscv64_riscv64	rv64gc	little	none	riscv64gc-unknown-linux-musl	generic-rv64	default	qemu-riscv64	RISCV64	ON	RISC-V
+ipk	sifiveu	generic	riscv64_riscv64	rv64gc	little	none	riscv64gc-unknown-linux-musl	generic-rv64	default	qemu-riscv64	RISCV64	ON	RISC-V
+apk	sifiveu	generic	riscv64_generic	rv64gc	little	none	riscv64gc-unknown-linux-musl	generic-rv64	default	qemu-riscv64	RISCV64	ON	RISC-V
