@@ -147,6 +147,10 @@ grep -Fq '$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/bin/cno' \
 grep -Fq '$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/lib/cno/ext/oxc.so' \
     "$CNO_BUILDS_ROOT/packaging/openwrt/Makefile" \
     || die 'OpenWrt package must consume the CMake-installed OXC module from PKG_INSTALL_DIR'
+if grep -Eq 'cp[[:space:]]+-aL[[:space:]]' \
+    "$CNO_BUILDS_ROOT/packaging/openwrt/Makefile"; then
+    die 'OpenWrt QEMU sysroot copies must preserve SDK symlinks (x86 lib64 points to .)'
+fi
 
 work=$(make_temp_dir)
 trap 'rm -rf -- "$work"' EXIT HUP INT TERM

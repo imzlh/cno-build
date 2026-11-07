@@ -82,13 +82,13 @@ define Build/Configure
 	rm -rf $(CNO_QEMU_ROOT)
 	mkdir -p $(CNO_QEMU_ROOT)/lib $(CNO_QEMU_ROOT)/usr/lib
 	if [ -d $(TOOLCHAIN_DIR)/lib ]; then \
-		cp -aL $(TOOLCHAIN_DIR)/lib/. $(CNO_QEMU_ROOT)/lib/; \
+		cp -a $(TOOLCHAIN_DIR)/lib/. $(CNO_QEMU_ROOT)/lib/; \
 	fi
 	if [ -d $(STAGING_DIR)/lib ]; then \
-		cp -aL $(STAGING_DIR)/lib/. $(CNO_QEMU_ROOT)/lib/; \
+		cp -a $(STAGING_DIR)/lib/. $(CNO_QEMU_ROOT)/lib/; \
 	fi
 	if [ -d $(STAGING_DIR)/usr/lib ]; then \
-		cp -aL $(STAGING_DIR)/usr/lib/. $(CNO_QEMU_ROOT)/usr/lib/; \
+		cp -a $(STAGING_DIR)/usr/lib/. $(CNO_QEMU_ROOT)/usr/lib/; \
 	fi
 	printf '%s\n' '#!/bin/sh' \
 		'exec $(CNO_QEMU) -L "$(CNO_QEMU_ROOT)" "$(CNO_TARGET_BIN_DIR)/cjsc" "$$$$@"' \
