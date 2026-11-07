@@ -137,6 +137,10 @@ if grep -Eq '^[[:space:]]*CMAKE_INSTALL[[:space:]]*:=' \
     "$CNO_BUILDS_ROOT/packaging/openwrt/Makefile"; then
     die 'OpenWrt package recipe uses CMAKE_INSTALL instead of PKG_INSTALL'
 fi
+if grep -Eq '^[[:space:]]*\+\$\(NINJA\)' \
+    "$CNO_BUILDS_ROOT/packaging/openwrt/Makefile"; then
+    die 'OpenWrt package recipe bypasses the official CMake compile macro'
+fi
 cp "$CNO_BUILDS_ROOT/packaging/openwrt/Makefile" "$sdk_dir/package/cno/Makefile"
 cp "$CNO_BUILDS_ROOT/packaging/openwrt/openwrt-project.cmake" \
     "$sdk_dir/package/cno/openwrt-project.cmake"

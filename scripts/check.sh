@@ -120,6 +120,24 @@ grep -Fq 'NOT COMMAND _cno_assert_target_abi OR NOT CNO_TARGET_ABI_ASSERTIONS_OK
 grep -Fq 'NOT CNO_TARGET_ENDIAN OR NOT CNO_TARGET_FLOAT_ABI' \
     "$CNO_BUILDS_ROOT/packaging/openwrt/openwrt-project.cmake" \
     || die 'OpenWrt CMake hook must require both target ABI values'
+for compile_call in \
+    '$(call Build/Compile/Default,cjsc qjsc)' \
+    '$(call Build/Compile/Default,cjsc)' \
+    '$(call Build/Compile/Default)'
+do
+    grep -Fq "$compile_call" "$CNO_BUILDS_ROOT/packaging/openwrt/Makefile" \
+        || die "OpenWrt package recipe bypasses the official CMake compile macro: $compile_call"
+done
+if rg -n '^[[:space:]]*\+\$\(NINJA\)' \
+    "$CNO_BUILDS_ROOT/packaging/openwrt/Makefile" >/dev/null; then
+    die 'OpenWrt package recipe must not bypass Build/Compile/Default with a direct Ninja call'
+fi
+grep -Fq '$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/bin/cno' \
+    "$CNO_BUILDS_ROOT/packaging/openwrt/Makefile" \
+    || die 'OpenWrt package must consume the CMake-installed runtime from PKG_INSTALL_DIR'
+grep -Fq '$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/lib/cno/ext/oxc.so' \
+    "$CNO_BUILDS_ROOT/packaging/openwrt/Makefile" \
+    || die 'OpenWrt package must consume the CMake-installed OXC module from PKG_INSTALL_DIR'
 
 work=$(make_temp_dir)
 trap 'rm -rf -- "$work"' EXIT HUP INT TERM
