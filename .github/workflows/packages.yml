@@ -289,7 +289,10 @@ jobs:
               tail -n 200 "$RUNNER_TEMP/riscv64-build.log"
               echo '::endgroup::'
             } >&2
-            annotation=$(tail -n 80 "$RUNNER_TEMP/riscv64-build.log" | tail -c 12000)
+            # GitHub renders only the first few KiB of a workflow-command
+            # annotation. Keep the actual end of the log inside that limit so
+            # the compiler error cannot be truncated behind earlier output.
+            annotation=$(tail -c 3000 "$RUNNER_TEMP/riscv64-build.log")
             annotation=${annotation//'%'/'%25'}
             annotation=${annotation//$'\r'/'%0D'}
             annotation=${annotation//$'\n'/'%0A'}
@@ -524,7 +527,10 @@ jobs:
               tail -n 200 "$log"
               echo '::endgroup::'
             } >&2
-            annotation=$(tail -n 80 "$log" | tail -c 12000)
+            # GitHub renders only the first few KiB of a workflow-command
+            # annotation. Keep the actual end of the log inside that limit so
+            # the build error cannot be truncated behind earlier output.
+            annotation=$(tail -c 3000 "$log")
             annotation=${annotation//'%'/'%25'}
             annotation=${annotation//$'\r'/'%0D'}
             annotation=${annotation//$'\n'/'%0A'}
