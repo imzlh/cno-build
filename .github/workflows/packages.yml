@@ -137,9 +137,11 @@ jobs:
         if: steps.decision.outputs.build == 'true'
         name: Generate package matrices from configuration
         run: |
-          echo "debian=$(sh scripts/config-matrix.sh debian)" >> "$GITHUB_OUTPUT"
-          echo "alpine=$(sh scripts/config-matrix.sh alpine)" >> "$GITHUB_OUTPUT"
-          echo "openwrt=$(sh scripts/config-matrix.sh openwrt)" >> "$GITHUB_OUTPUT"
+          {
+            echo "debian=$(sh scripts/config-matrix.sh debian)"
+            echo "alpine=$(sh scripts/config-matrix.sh alpine)"
+            echo "openwrt=$(sh scripts/config-matrix.sh openwrt)"
+          } >> "$GITHUB_OUTPUT"
 
   source:
     name: Prepare immutable cno-cli source
