@@ -147,10 +147,26 @@ grep -Fq '$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/bin/cno' \
 grep -Fq '$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/lib/cno/ext/oxc.so' \
     "$CNO_BUILDS_ROOT/packaging/openwrt/Makefile" \
     || die 'OpenWrt package must consume the CMake-installed OXC module from PKG_INSTALL_DIR'
+grep -Fq 'CNO_OPENWRT_DEPENDS?=+ca-bundle +libc +libcurl +libopenssl +libsqlite3 +libffi +libexpat +zlib' \
+    "$CNO_BUILDS_ROOT/packaging/openwrt/Makefile" \
+    || die 'OpenWrt dependencies must use logical package names so development files are staged'
+if grep -Eq 'CNO_OPENWRT_DEPENDS.*(libcurl4|libopenssl3|libsqlite3-0)' \
+    "$CNO_BUILDS_ROOT/packaging/openwrt/Makefile"; then
+    die 'OpenWrt recipes must not use generated ABI-suffixed repository package names'
+fi
 if grep -Eq 'cp[[:space:]]+-aL[[:space:]]' \
     "$CNO_BUILDS_ROOT/packaging/openwrt/Makefile"; then
     die 'OpenWrt QEMU sysroot copies must preserve SDK symlinks (x86 lib64 points to .)'
 fi
+grep -Fq 'patch --dry-run --forward --silent -d "$libuv_root" -p1 < "$libuv_patch"' \
+    "$CNO_BUILDS_ROOT/patches/cno-cli-openwrt-cross-abi.patch" \
+    || die 'cno source patch must apply the RISC-V libuv fix independently of nested Git metadata'
+grep -Fq "grep -Fq '.insn 0x0100000f'" \
+    "$CNO_BUILDS_ROOT/patches/cno-cli-openwrt-cross-abi.patch" \
+    || die 'cno source patch must reject a silently skipped RISC-V libuv fix'
+grep -Fq "grep -Fq '.word 0x0100000f'" \
+    "$CNO_BUILDS_ROOT/patches/cno-cli-openwrt-cross-abi.patch" \
+    || die 'cno source patch must prove the RISC-V libuv replacement is present'
 
 work=$(make_temp_dir)
 trap 'rm -rf -- "$work"' EXIT HUP INT TERM

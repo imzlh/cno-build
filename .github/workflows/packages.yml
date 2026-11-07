@@ -271,7 +271,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential cmake ninja-build pkg-config curl ca-certificates \
             zip unzip tar xz-utils autoconf automake libtool perl bison flex \
-            qemu-user
+            patch qemu-user
       - name: Build dynamic musl archive
         working-directory: work/cno-cli
         env:

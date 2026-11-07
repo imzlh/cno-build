@@ -3,7 +3,7 @@
 `cno-cli-openwrt-cross-abi.patch` is an explicit packaging patch for the
 sibling `cno-cli` repository. The workflow applies it only to the temporary,
 immutable source payload, so it never changes the developer's sibling checkout
-or pretends the packaging assertion is already part of upstream.
+or pretends the packaging fixes are already part of upstream.
 
 The patch adds configure-time target ABI assertions.  An OpenWrt SDK build can
 pass, for example:
@@ -39,6 +39,13 @@ git apply ../cno-builds/patches/cno-cli-openwrt-cross-abi.patch
 The package workflow already applies the patch to its temporary source payload
 and records the patch SHA-256. Committing it upstream is optional; if upstream
 later contains equivalent assertions, refresh or retire this patch explicitly.
+
+The same patch also makes the RISC-V libuv compatibility edit reliable after
+the source is archived without nested Git metadata. `git apply` invoked from
+the former libuv submodule directory can silently skip its only path when Git
+discovers the enclosing packaging checkout and still exit successfully. The
+patched helper uses `patch` against an explicit directory and then asserts that
+the old `.insn` spelling is gone before invoking the musl.cc assembler.
 
 Do not use this patch to label the existing musl.cc MIPS release as soft-float.
 That upstream helper explicitly checks for o32 hard-float.  OpenWrt's MIPS

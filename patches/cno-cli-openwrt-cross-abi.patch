@@ -77,3 +77,39 @@ index f3f2f37..0000000 100644
  # Startup cost is dominated by decoding the embedded bytecode blob, which has no
  # lazy path, so bundle size matters: minify by default in release builds.
  if(CNO_RELEASE)
+diff --git a/scripts/ci/linux/cross.sh b/scripts/ci/linux/cross.sh
+index 7dd418c..0000000 100644
+--- a/scripts/ci/linux/cross.sh
++++ b/scripts/ci/linux/cross.sh
+@@ -27,7 +27,7 @@ if [[ $(uname -s) != Linux || $(uname -m) != x86_64 ]]; then
+     printf 'musl.cc cross toolchains require an x86_64 Linux build host.\n' >&2
+     exit 2
+ fi
+-for program in cmake ninja git curl tar sha512sum node timeout "$emulator"; do
++for program in cmake ninja git curl tar patch sha512sum node timeout "$emulator"; do
+     command -v "$program" >/dev/null
+ done
+
+@@ -72,12 +72,19 @@ if [[ $target == riscv64 ]]; then
+     # Accept an already applied patch, but fail visibly if upstream diverges.
+     libuv_root="$root/circu.js/deps/libuv"
+     libuv_patch="$root/scripts/ci/linux/riscv64-libuv.patch"
+-    if git -C "$libuv_root" apply --check "$libuv_patch" 2>/dev/null; then
+-        git -C "$libuv_root" apply "$libuv_patch"
+-    elif ! git -C "$libuv_root" apply --reverse --check "$libuv_patch" 2>/dev/null; then
++    if patch --dry-run --forward --silent -d "$libuv_root" -p1 < "$libuv_patch"; then
++        patch --forward --silent -d "$libuv_root" -p1 < "$libuv_patch"
++    elif ! patch --dry-run --reverse --silent -d "$libuv_root" -p1 < "$libuv_patch"; then
+         printf 'The RISC-V libuv compatibility patch does not match this checkout.\n' >&2
+         exit 1
+     fi
++    libuv_source="$libuv_root/src/uv-common.c"
++    if grep -Fq '.insn 0x0100000f' "$libuv_source" ||
++        ! grep -Fq '.word 0x0100000f' "$libuv_source"
++    then
++        printf 'The RISC-V libuv compatibility patch was not applied.\n' >&2
++        exit 1
++    fi
+ fi
+
+ # Use the same vcpkg revision as the manifest, including its port versions.

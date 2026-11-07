@@ -33,10 +33,13 @@ CNO_WAMR_TARGET           WAMR target such as AARCH64 or ARMV7_VFP
 CNO_OPENWRT_DEPENDS       optional exact dependency expression for this SDK
 ```
 
-`CNO_OPENWRT_DEPENDS` defaults to the OpenWrt 24.10 names used by the common
-libraries.  A workflow should inspect the selected SDK/feed metadata and
-override it if a release renamed a package.  The intended linkage is dynamic
-against OpenWrt's target libraries; no private `$ORIGIN/lib` bundle is made.
+`CNO_OPENWRT_DEPENDS` defaults to the logical package names used by OpenWrt
+24.10 and snapshots.  Recipes must use names such as `libcurl`, `libopenssl`,
+and `libsqlite3`, not their generated repository filenames (`libcurl4`,
+`libopenssl3`, or `libsqlite3-0`).  OpenWrt uses the logical names to build and
+stage development files, then adds ABI suffixes to final runtime dependencies
+itself.  The intended linkage is dynamic against OpenWrt's target libraries;
+no private `$ORIGIN/lib` bundle is made.
 
 The Rust archive is only one half of OXC.  `Makefile` compiles and links the C
 binding with that SDK's `TARGET_CC`, `TARGET_CFLAGS`, and `TARGET_LDFLAGS`, so

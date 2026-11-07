@@ -11,7 +11,7 @@ CNO_QEMU?=qemu-$(ARCH)
 CNO_BIG_ENDIAN?=0
 CNO_WASM?=ON
 CNO_WAMR_TARGET?=
-CNO_OPENWRT_DEPENDS?=+ca-bundle +libc +libcurl4 +libopenssl3 +libsqlite3-0 +libffi +libexpat +zlib
+CNO_OPENWRT_DEPENDS?=+ca-bundle +libc +libcurl +libopenssl +libsqlite3 +libffi +libexpat +zlib
 
 PKG_SOURCE:=$(CNO_SOURCE_ARCHIVE)
 PKG_SOURCE_URL:=file://$(DL_DIR)
