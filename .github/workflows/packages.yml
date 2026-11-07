@@ -20,11 +20,11 @@ permissions:
   contents: read
 
 # A single lane prevents two cno-build pushes from racing to publish the same
-# immutable cno-cli HEAD. A failed run leaves no success marker, so a later
-# push retries it.
+# immutable cno-cli HEAD. New packaging fixes supersede obsolete runs; a failed
+# or cancelled run leaves no success marker, so the latest push retries it.
 concurrency:
   group: packages-cno-head
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   prepare:
@@ -288,8 +288,12 @@ jobs:
               echo '::group::RISC-V build failure tail'
               tail -n 200 "$RUNNER_TEMP/riscv64-build.log"
               echo '::endgroup::'
-              echo '::error title=RISC-V cross build failed::Last 200 log lines are printed above.'
             } >&2
+            annotation=$(tail -n 80 "$RUNNER_TEMP/riscv64-build.log" | tail -c 12000)
+            annotation=${annotation//'%'/'%25'}
+            annotation=${annotation//$'\r'/'%0D'}
+            annotation=${annotation//$'\n'/'%0A'}
+            echo "::error title=RISC-V cross build failed::$annotation" >&2
             exit "$status"
           fi
       - uses: actions/upload-artifact@v4
@@ -519,8 +523,12 @@ jobs:
               echo "::group::OpenWrt $FORMAT $TARGET/$SUBTARGET failure tail"
               tail -n 200 "$log"
               echo '::endgroup::'
-              echo "::error title=OpenWrt $FORMAT $TARGET/$SUBTARGET failed::Last 200 log lines are printed above."
             } >&2
+            annotation=$(tail -n 80 "$log" | tail -c 12000)
+            annotation=${annotation//'%'/'%25'}
+            annotation=${annotation//$'\r'/'%0D'}
+            annotation=${annotation//$'\n'/'%0A'}
+            echo "::error title=OpenWrt $FORMAT $TARGET/$SUBTARGET failed::$annotation" >&2
             exit "$status"
           fi
       - uses: actions/upload-artifact@v4
