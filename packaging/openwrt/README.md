@@ -49,11 +49,14 @@ package. Seed the logical `libcurl` and `libopenssl` packages together with the
 choice; snapshots reject an HTTPS-enabled curl build when no usable TLS backend
 is selected or detected.
 
-Only cno's dependency recipes are installed from the packages feed. Installing
-the complete feed exposes unrelated package Kconfig, so a recursive dependency
-in another recipe can make `defconfig` write an incomplete `.config` even when
-it exits successfully. Every `defconfig` invocation is therefore also checked
-for recursive-dependency diagnostics.
+The SDK's own `feeds.conf.default` pins both its OpenWrt base source and the
+packages feed. Both indexes must be updated: SDK archives contain only a small
+subset of core recipes, while OpenSSL, zlib, and CA certificates come from the
+pinned base source. Only cno's dependency recipes are then installed from base
+and packages. Installing a complete feed exposes unrelated package Kconfig, so
+a recursive dependency in another recipe can make `defconfig` write an
+incomplete `.config` even when it exits successfully. Every `defconfig`
+invocation is therefore also checked for recursive-dependency diagnostics.
 
 The Rust archive is only one half of OXC.  `Makefile` compiles and links the C
 binding with that SDK's `TARGET_CC`, `TARGET_CFLAGS`, and `TARGET_LDFLAGS`, so

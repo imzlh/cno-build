@@ -65,6 +65,12 @@ grep -Fq 'sh scripts/report-build-failure.sh "$log"' \
 grep -Fq '[openwrt-sdk] parallel build failed; retrying package/cno serially' \
     "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" \
     || die 'OpenWrt failures must be retried serially for deterministic diagnostics'
+grep -Fq './scripts/feeds update base packages' \
+    "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" \
+    || die 'OpenWrt must index the SDK-pinned base and packages feeds'
+grep -Fq './scripts/feeds install -p base openssl zlib ca-certificates' \
+    "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" \
+    || die 'OpenWrt must install cno core dependency recipes from the base feed'
 grep -Fq './scripts/feeds install -p packages libcurl libsqlite3 libffi libexpat' \
     "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" \
     || die 'OpenWrt must install only cno dependency recipes from the packages feed'

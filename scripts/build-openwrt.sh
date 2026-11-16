@@ -148,14 +148,16 @@ cp "$source_archive" "$sdk_dir/dl/$source_name"
 cp "$bundle" "$sdk_dir/dl/$bundle_name"
 cp "$oxc_archive" "$sdk_dir/dl/$oxc_name"
 
-# Development headers for some of cno's system shared libraries live in the
-# packages feed. Install only the required recipes and their dependencies.
-# Installing the whole feed adds unrelated Kconfig entries; a broken package
-# elsewhere in the feed must not make cno's defconfig incomplete.
+# The SDK is deliberately stripped down. Its feeds.conf.default supplies a
+# pinned base feed for core recipes and a packages feed for community recipes.
+# Install only cno's required recipes and their dependencies. Installing an
+# entire feed adds unrelated Kconfig entries; a broken package elsewhere in a
+# feed must not make cno's defconfig incomplete.
 if [ -x "$sdk_dir/scripts/feeds" ]; then
     (
         cd "$sdk_dir"
-        ./scripts/feeds update packages
+        ./scripts/feeds update base packages
+        ./scripts/feeds install -p base openssl zlib ca-certificates
         ./scripts/feeds install -p packages libcurl libsqlite3 libffi libexpat
     )
 fi
