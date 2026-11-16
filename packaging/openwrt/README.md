@@ -49,6 +49,12 @@ package. Seed the logical `libcurl` and `libopenssl` packages together with the
 choice; snapshots reject an HTTPS-enabled curl build when no usable TLS backend
 is selected or detected.
 
+Only cno's dependency recipes are installed from the packages feed. Installing
+the complete feed exposes unrelated package Kconfig, so a recursive dependency
+in another recipe can make `defconfig` write an incomplete `.config` even when
+it exits successfully. Every `defconfig` invocation is therefore also checked
+for recursive-dependency diagnostics.
+
 The Rust archive is only one half of OXC.  `Makefile` compiles and links the C
 binding with that SDK's `TARGET_CC`, `TARGET_CFLAGS`, and `TARGET_LDFLAGS`, so
 the module receives the same endianness, float ABI, and platform flags as cno.

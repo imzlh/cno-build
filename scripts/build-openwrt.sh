@@ -148,13 +148,15 @@ cp "$source_archive" "$sdk_dir/dl/$source_name"
 cp "$bundle" "$sdk_dir/dl/$bundle_name"
 cp "$oxc_archive" "$sdk_dir/dl/$oxc_name"
 
-# Development headers for cno's system shared libraries live in the packages
-# feed. Install its recipes before selecting cno.
+# Development headers for some of cno's system shared libraries live in the
+# packages feed. Install only the required recipes and their dependencies.
+# Installing the whole feed adds unrelated Kconfig entries; a broken package
+# elsewhere in the feed must not make cno's defconfig incomplete.
 if [ -x "$sdk_dir/scripts/feeds" ]; then
     (
         cd "$sdk_dir"
         ./scripts/feeds update packages
-        ./scripts/feeds install -a -p packages
+        ./scripts/feeds install -p packages libcurl libsqlite3 libffi libexpat
     )
 fi
 
@@ -179,11 +181,29 @@ sdk_make() {
     )
 }
 
-sdk_make defconfig
+sdk_defconfig() {
+    phase=$1
+    defconfig_log="$work/defconfig-$phase.log"
+    if sdk_make defconfig > "$defconfig_log" 2>&1; then
+        :
+    else
+        defconfig_status=$?
+        cat "$defconfig_log" >&2
+        die "SDK defconfig failed during $phase (exit $defconfig_status)"
+    fi
+    cat "$defconfig_log"
+    # Kconfig can report a recursive dependency yet return success after
+    # writing a partially normalized .config. Never consume that result.
+    if grep -Fqi 'recursive dependency detected' "$defconfig_log"; then
+        die "SDK defconfig reported a recursive Kconfig dependency during $phase"
+    fi
+}
+
+sdk_defconfig initial
 sed -i '/^# CONFIG_PACKAGE_cno is not set$/d;/^CONFIG_PACKAGE_cno=/d' "$sdk_dir/.config"
 printf '%s\n' 'CONFIG_PACKAGE_cno=m' >> "$sdk_dir/.config"
 # defconfig consumes the explicit package selection and its dependencies.
-sdk_make defconfig
+sdk_defconfig cno
 grep -q '^CONFIG_PACKAGE_cno=m$' "$sdk_dir/.config" \
     || die 'SDK defconfig did not retain CONFIG_PACKAGE_cno=m'
 
@@ -206,7 +226,9 @@ printf '%s\n' \
     'CONFIG_PACKAGE_libcurl=m' \
     'CONFIG_PACKAGE_libopenssl=m' \
     'CONFIG_LIBCURL_OPENSSL=y' >> "$sdk_dir/.config"
-sdk_make defconfig
+sdk_defconfig curl-openssl
+grep -q '^CONFIG_PACKAGE_cno=m$' "$sdk_dir/.config" \
+    || die 'SDK defconfig dropped CONFIG_PACKAGE_cno=m while selecting curl TLS'
 grep -q '^CONFIG_LIBCURL_OPENSSL=y$' "$sdk_dir/.config" \
     || die 'SDK defconfig did not retain the libcurl OpenSSL backend'
 grep -Eq '^CONFIG_PACKAGE_libcurl=[my]$' "$sdk_dir/.config" \

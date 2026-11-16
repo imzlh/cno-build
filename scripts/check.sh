@@ -65,6 +65,19 @@ grep -Fq 'sh scripts/report-build-failure.sh "$log"' \
 grep -Fq '[openwrt-sdk] parallel build failed; retrying package/cno serially' \
     "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" \
     || die 'OpenWrt failures must be retried serially for deterministic diagnostics'
+grep -Fq './scripts/feeds install -p packages libcurl libsqlite3 libffi libexpat' \
+    "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" \
+    || die 'OpenWrt must install only cno dependency recipes from the packages feed'
+if grep -Fq './scripts/feeds install -a' \
+    "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh"; then
+    die 'OpenWrt must not expose unrelated packages-feed Kconfig entries'
+fi
+grep -Fq "grep -Fqi 'recursive dependency detected'" \
+    "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" \
+    || die 'OpenWrt defconfig must reject recursive Kconfig diagnostics'
+grep -Fq 'sdk_defconfig curl-openssl' \
+    "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" \
+    || die 'OpenWrt curl TLS selection must use checked defconfig output'
 grep -Fq "'CONFIG_LIBCURL_OPENSSL=y'" \
     "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" \
     || die 'OpenWrt libcurl must use the explicitly selected OpenSSL backend'
