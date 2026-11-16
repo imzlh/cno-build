@@ -121,6 +121,19 @@ printf '%s' "$openwrt_matrix" | jq -e \
         (.wasm == "ON" or .wasm == "OFF"))' >/dev/null
 printf '%s' "$openwrt_matrix" | jq -e \
     'group_by([.format, .target, .subtarget]) | all(.[]; length == 1)' >/dev/null
+
+# ARCH_PACKAGES is the user-facing OpenWrt compatibility identifier. Keep the
+# SDK target/subtarget as a suffix because two SDKs may share that package
+# architecture while using different CPU tuning (for example mt7620/mt7621).
+grep -Fq 'name: OpenWrt ${{ matrix.format }} ${{ matrix.expected_arch }} (${{ matrix.target }}/${{ matrix.subtarget }})' \
+    "$CNO_BUILDS_ROOT/.github/workflows/packages.yml" \
+    || die 'OpenWrt job names must lead with the official package architecture'
+grep -Fq 'packages-openwrt-${{ matrix.format }}-${{ matrix.expected_arch }}-${{ matrix.target }}-${{ matrix.subtarget }}' \
+    "$CNO_BUILDS_ROOT/.github/workflows/packages.yml" \
+    || die 'OpenWrt artifacts must include the official package architecture'
+grep -Fq 'openwrt-${release}-${expected_arch}-${target}-${subtarget}.${format}' \
+    "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" \
+    || die 'OpenWrt release assets must include the official package architecture'
 printf '%s' "$openwrt_matrix" | jq -r '.[] | "\(.rust_target)\t\(.rust_cpu)"' \
     | sort -u \
     | while IFS="$(printf '\t')" read -r rust_target rust_cpu; do
@@ -448,17 +461,17 @@ awk -F '\t' '!/^#/ && NF { print $2 }' "$CNO_BUILDS_ROOT/config/alpine-targets.t
         touch "$release_input/cno-1.2.3-r${CNO_PACKAGE_RELEASE}-${arch}.apk"
         touch "$release_input/cno-1.2.3-${arch}.rsa.pub"
     done
-awk -F '\t' '!/^#/ && NF { print $1, $2, $3 }' "$CNO_BUILDS_ROOT/config/openwrt-targets.tsv" \
-    | while read -r formats target subtarget; do
+awk -F '\t' '!/^#/ && NF { print $1, $2, $3, $4 }' "$CNO_BUILDS_ROOT/config/openwrt-targets.tsv" \
+    | while read -r formats target subtarget expected_arch; do
         case "+$formats+" in
             *+ipk+*)
-                stable="cno-1.2.3-r${CNO_PACKAGE_RELEASE}-openwrt-24.10.0-${target}-${subtarget}.ipk"
+                stable="cno-1.2.3-r${CNO_PACKAGE_RELEASE}-openwrt-24.10.0-${expected_arch}-${target}-${subtarget}.ipk"
                 touch "$release_input/$stable" "$release_input/$stable.buildinfo"
                 ;;
         esac
         case "+$formats+" in
             *+apk+*)
-                snapshot="cno-1.2.3-r${CNO_PACKAGE_RELEASE}-openwrt-snapshots-${target}-${subtarget}.apk"
+                snapshot="cno-1.2.3-r${CNO_PACKAGE_RELEASE}-openwrt-snapshots-${expected_arch}-${target}-${subtarget}.apk"
                 touch "$release_input/$snapshot" "$release_input/$snapshot.buildinfo"
                 ;;
         esac

@@ -257,7 +257,7 @@ sh "$CNO_BUILDS_ROOT/scripts/verify-openwrt-elf.sh" \
     "$rust_target" "$rust_features" "$runtime" "$oxc"
 
 mkdir -p "$output_dir"
-output_name="${CNO_PACKAGE_NAME}-${version}-r${CNO_PACKAGE_RELEASE}-openwrt-${release}-${target}-${subtarget}.${format}"
+output_name="${CNO_PACKAGE_NAME}-${version}-r${CNO_PACKAGE_RELEASE}-openwrt-${release}-${expected_arch}-${target}-${subtarget}.${format}"
 cp "$package" "$output_dir/$output_name"
 # Exercise the payload extracted from the final package rather than only the
 # SDK's pre-archive staging tree. This catches format/strip/install mistakes.

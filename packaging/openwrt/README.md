@@ -58,7 +58,10 @@ Before building, compare `expected_arch_packages` with the SDK's actual
 `CONFIG_TARGET_ARCH_PACKAGES`, validate the resulting ELF against
 `machine_regex`, and record the SDK's target optimization flags in build
 provenance. The matrix key is `format + release + target + subtarget`, not the
-package architecture.
+package architecture. Job, artifact, and release-asset names should lead with
+the verified package architecture and retain target/subtarget as a suffix; the
+suffix prevents collisions when multiple SDKs publish the same architecture
+label with different tuning.
 
 `rust_features` is one of `default`, `aarch64-no-crypto`, `arm-soft-nofp`,
 `arm-hard-d16`, or `arm-hard-neon`. It is a controlled profile rather than

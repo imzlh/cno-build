@@ -471,7 +471,7 @@ jobs:
               "/work/dist/deb/$DEB_ARCH/cno_${VERSION}-${PACKAGE_RELEASE}_${DEB_ARCH}.deb" "$VERSION"
 
   openwrt:
-    name: OpenWrt ${{ matrix.format }} ${{ matrix.target }}/${{ matrix.subtarget }}
+    name: OpenWrt ${{ matrix.format }} ${{ matrix.expected_arch }} (${{ matrix.target }}/${{ matrix.subtarget }})
     needs: [prepare, source]
     if: needs.prepare.outputs.build == 'true'
     runs-on: ubuntu-24.04
@@ -520,7 +520,7 @@ jobs:
         shell: bash
         run: |
           if [ "$FORMAT" = ipk ]; then release=$STABLE_RELEASE; else release=snapshots; fi
-          log="$RUNNER_TEMP/openwrt-$FORMAT-$TARGET-$SUBTARGET.log"
+          log="$RUNNER_TEMP/openwrt-$FORMAT-$EXPECTED_ARCH-$TARGET-$SUBTARGET.log"
           set +e
           sh scripts/build-openwrt.sh "$FORMAT" "$release" "$TARGET" "$SUBTARGET" \
             "$EXPECTED_ARCH" "$CPU_TUNE" "$ENDIAN" "$FLOAT_ABI" \
@@ -529,20 +529,20 @@ jobs:
             "$MACHINE_REGEX" "$VERSION" "$SOURCE_COMMIT" \
             "work/cno-source/cno-source-$VERSION.tar.gz" \
             "work/cno-source/cno-cli-$VERSION.min.js" \
-            "dist/openwrt/$FORMAT/$TARGET-$SUBTARGET" 2>&1 | tee "$log"
+            "dist/openwrt/$FORMAT/$EXPECTED_ARCH-$TARGET-$SUBTARGET" 2>&1 | tee "$log"
           status=${PIPESTATUS[0]}
           set -e
           if [ "$status" -ne 0 ]; then
             sh scripts/report-build-failure.sh "$log" \
-              "OpenWrt $FORMAT $TARGET/$SUBTARGET failed"
+              "OpenWrt $FORMAT $EXPECTED_ARCH ($TARGET/$SUBTARGET) failed"
             exit "$status"
           fi
       - uses: actions/upload-artifact@v4
         with:
-          name: packages-openwrt-${{ matrix.format }}-${{ matrix.target }}-${{ matrix.subtarget }}
+          name: packages-openwrt-${{ matrix.format }}-${{ matrix.expected_arch }}-${{ matrix.target }}-${{ matrix.subtarget }}
           path: |
-            dist/openwrt/${{ matrix.format }}/${{ matrix.target }}-${{ matrix.subtarget }}/*.${{ matrix.format }}
-            dist/openwrt/${{ matrix.format }}/${{ matrix.target }}-${{ matrix.subtarget }}/*.buildinfo
+            dist/openwrt/${{ matrix.format }}/${{ matrix.expected_arch }}-${{ matrix.target }}-${{ matrix.subtarget }}/*.${{ matrix.format }}
+            dist/openwrt/${{ matrix.format }}/${{ matrix.expected_arch }}-${{ matrix.target }}-${{ matrix.subtarget }}/*.buildinfo
           if-no-files-found: error
 
   release:

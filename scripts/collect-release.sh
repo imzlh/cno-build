@@ -85,14 +85,14 @@ awk -F '\t' '!/^#/ && NF { print $2 }' "$CNO_BUILDS_ROOT/config/alpine-targets.t
     | while IFS= read -r arch; do
         require_file "${CNO_PACKAGE_NAME}-${version}-r${CNO_PACKAGE_RELEASE}-${arch}.apk"
     done
-awk -F '\t' '!/^#/ && NF { print $1, $2, $3 }' "$CNO_BUILDS_ROOT/config/openwrt-targets.tsv" \
-    | while read -r formats target subtarget; do
+awk -F '\t' '!/^#/ && NF { print $1, $2, $3, $4 }' "$CNO_BUILDS_ROOT/config/openwrt-targets.tsv" \
+    | while read -r formats target subtarget expected_arch; do
         case "+$formats+" in
             *+ipk+*)
-                stable_pattern="${CNO_PACKAGE_NAME}-${version}-r${CNO_PACKAGE_RELEASE}-openwrt-${CNO_OPENWRT_IPK_SERIES}.*-${target}-${subtarget}.ipk"
+                stable_pattern="${CNO_PACKAGE_NAME}-${version}-r${CNO_PACKAGE_RELEASE}-openwrt-${CNO_OPENWRT_IPK_SERIES}.*-${expected_arch}-${target}-${subtarget}.ipk"
                 stable_count=$(count_files "$stable_pattern")
                 [ "$stable_count" -eq 1 ] \
-                    || die "expected one OpenWrt IPK for $target/$subtarget, found $stable_count"
+                    || die "expected one OpenWrt IPK for $expected_arch ($target/$subtarget), found $stable_count"
                 stable_path=$(find "$output_dir" -maxdepth 1 -type f \
                     -name "$stable_pattern" -print)
                 require_file "$(basename -- "$stable_path").buildinfo"
@@ -100,7 +100,7 @@ awk -F '\t' '!/^#/ && NF { print $1, $2, $3 }' "$CNO_BUILDS_ROOT/config/openwrt-
         esac
         case "+$formats+" in
             *+apk+*)
-                snapshot="${CNO_PACKAGE_NAME}-${version}-r${CNO_PACKAGE_RELEASE}-openwrt-snapshots-${target}-${subtarget}.apk"
+                snapshot="${CNO_PACKAGE_NAME}-${version}-r${CNO_PACKAGE_RELEASE}-openwrt-snapshots-${expected_arch}-${target}-${subtarget}.apk"
                 require_file "$snapshot"
                 require_file "$snapshot.buildinfo"
                 ;;

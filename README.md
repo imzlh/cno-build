@@ -22,13 +22,15 @@ downloaded assets, and never follows a moving source branch. It does not modify
 Debian architectures are amd64, i386, arm64, and armhf. Alpine architectures
 are x86_64, x86, aarch64, armv7, armhf, and riscv64.
 
-OpenWrt coverage is organized by SDK target/subtarget, not by a generic release
-architecture. The initial matrix includes x86-64, Pentium 4, generic AArch64,
-Cortex-A53, Cortex-A72, Cortex-A5, Cortex-A7 soft- and hard-float, Cortex-A9
-soft- and hard-float, Cortex-A15, ARM1176/ARMv6, ARM926/ARMv5, XScale/ARMv5,
-MIPS 24Kc in both byte orders, MIPS 74Kc, MIPS 1004Kc, and RV64GC. Each row is
-built twice where available: once for OpenWrt 24.10 IPK and once for the current
-snapshot APK format.
+OpenWrt assets are identified first by the SDK's official `ARCH_PACKAGES`
+value, such as `aarch64_cortex-a53` or `mipsel_24kc`. The SDK
+target/subtarget remains in every name to distinguish SDKs that share a package
+architecture but use different CPU tuning. The initial matrix includes x86-64,
+Pentium 4, generic AArch64, Cortex-A53, Cortex-A72, Cortex-A5, Cortex-A7 soft-
+and hard-float, Cortex-A9 soft- and hard-float, Cortex-A15, ARM1176/ARMv6,
+ARM926/ARMv5, XScale/ARMv5, MIPS 24Kc in both byte orders, MIPS 74Kc, MIPS
+1004Kc, and RV64GC. Each row is built twice where available: once for OpenWrt
+24.10 IPK and once for the current snapshot APK format.
 
 The exact rows and their expected SDK metadata live in
 [`config/openwrt-targets.tsv`](config/openwrt-targets.tsv). A row is never
@@ -130,14 +132,14 @@ sudo apk add ./cno-1.1.0-r2-x86_64.apk
 OpenWrt 24.10.x example:
 
 ```sh
-opkg install ./cno-1.1.0-r2-openwrt-24.10.4-bcm27xx-bcm2710.ipk
+opkg install ./cno-1.1.0-r2-openwrt-24.10.4-aarch64_cortex-a53-bcm27xx-bcm2710.ipk
 ```
 
 OpenWrt snapshot APKs use the SDK's local build key rather than a firmware trust
 key, so a downloaded standalone package is installed explicitly as untrusted:
 
 ```sh
-apk add --allow-untrusted ./cno-1.1.0-r2-openwrt-snapshots-bcm27xx-bcm2710.apk
+apk add --allow-untrusted ./cno-1.1.0-r2-openwrt-snapshots-aarch64_cortex-a53-bcm27xx-bcm2710.apk
 ```
 
 Then verify the runtime:
