@@ -223,6 +223,12 @@ arm_fpu_d16=
 if [ "$rust_features" = arm-hard-d16 ] && [ "$cpu_tune" = cortex-a5 ]; then
     arm_fpu_d16=vfpv4-d16
 fi
+# The ELF verifier only needs to know which FPU tag the SDK's prebuilt CRT
+# objects legally contribute to the merged Tag_FP_arch on this row.
+crt_fp_arch_widening=
+if [ -n "$arm_fpu_d16" ]; then
+    crt_fp_arch_widening=VFPv4
+fi
 
 sdk_make() {
     (
@@ -426,7 +432,7 @@ assert_staged_payload "$staged_root"
 sh "$CNO_BUILDS_ROOT/scripts/verify-openwrt-elf.sh" \
     "$sdk_dir" "$expected_arch" "$endian" "$machine_regex" "$float_abi" \
     "$rust_target" "$rust_features" "$runtime" "$oxc" \
-    "$arm_fpu_d16" staged
+    "$crt_fp_arch_widening" staged
 
 mkdir -p "$output_dir"
 output_name="${CNO_PACKAGE_NAME}-${version}-r${CNO_PACKAGE_RELEASE}-openwrt-${release}-${expected_arch}-${target}-${subtarget}.${format}"
@@ -500,7 +506,7 @@ sh "$CNO_BUILDS_ROOT/scripts/verify-openwrt-elf.sh" \
     "$sdk_dir" "$expected_arch" "$endian" "$machine_regex" "$float_abi" \
     "$rust_target" "$rust_features" \
     "$packaged_root/usr/lib/cno/cno" "$packaged_root/usr/lib/cno/ext/oxc.so" \
-    "$arm_fpu_d16" packaged
+    "$crt_fp_arch_widening" packaged
 runtime_archive="$work/$output_name.runtime.tar.gz"
 tar -czf "$runtime_archive" -C "$packaged_root" .
 sh "$CNO_BUILDS_ROOT/scripts/smoke-openwrt.sh" \
