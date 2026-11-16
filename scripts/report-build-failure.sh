@@ -62,14 +62,17 @@ if [ -n "$first_diagnostic" ]; then
     {
         printf 'First high-signal diagnostic (log line %s):\n' "$first_diagnostic"
         # Put the matched line first so it survives the annotation byte limit.
+        # Truncate every line: a FAILED: match is typically followed by one
+        # multi-kilobyte compiler command line that would otherwise consume
+        # the whole budget before the actual compiler error appears.
         awk -v first="$first_diagnostic" \
-            'NR >= first && NR <= first + 18 { print }' "$log"
+            'NR >= first && NR <= first + 18 { print substr($0, 1, 240) }' "$log"
         start=$((first_diagnostic - 5))
         [ "$start" -gt 0 ] || start=1
         if [ "$start" -lt "$first_diagnostic" ]; then
             printf '\nImmediately preceding lines:\n'
             awk -v start="$start" -v first="$first_diagnostic" \
-                'NR >= start && NR < first { print }' "$log"
+                'NR >= start && NR < first { print substr($0, 1, 240) }' "$log"
         fi
     } > "$work/diagnostic"
 else

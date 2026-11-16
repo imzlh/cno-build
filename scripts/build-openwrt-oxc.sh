@@ -72,10 +72,15 @@ source_dir=$(CDPATH= cd -- "$source_dir" && pwd)
 cp "$source_dir/scripts/ci/oxc/Cargo.lock" "$source_dir/ext-oxc/Cargo.lock"
 
 tier3=false
-case $rust_target in mips*-unknown-linux-musl*) tier3=true ;; esac
-if [ "$tier3" = true ]; then
-    # MIPS tier-3 targets publish no std component. Rebuild std with a pinned
-    # nightly newer than the 1.95 dependency baseline and record its identity.
+build_std=false
+case $rust_target in mips*-unknown-linux-musl*) tier3=true; build_std=true ;; esac
+case $rust_features in arm-soft-nofp|arm-hard-d16) build_std=true ;; esac
+if [ "$build_std" = true ]; then
+    # MIPS tier-3 targets publish no std component. The ARM soft/no-FP and D16
+    # profiles additionally cannot use the precompiled std: it ships generic
+    # ARMv7 VFP attributes (and opcodes) that violate those profiles on boards
+    # without such units. Rebuild std from source with a pinned nightly newer
+    # than the 1.95 dependency baseline and record its identity.
     toolchain=${CNO_OXC_RUST_NIGHTLY:-nightly-2026-10-15}
     rustup toolchain install "$toolchain" --profile minimal --no-self-update --component rust-src
     set -- -Z build-std=std,panic_abort
@@ -170,11 +175,11 @@ case $rust_features in
         ;;
 esac
 rustflags="${RUSTFLAGS:+$RUSTFLAGS }-Crelocation-model=pic -Ctarget-feature=$target_features -Ctarget-cpu=$rust_cpu"
-if [ "$tier3" = false ]; then
+if [ "$build_std" = false ]; then
     # Stable musl targets ship self-contained CRT objects. They are not wanted
     # in a loadable module, so use the upstream cno OXC policy for those rows.
-    # MIPS rebuilds std itself and is linked into oxc.so later by TARGET_CC;
-    # forcing this unstable tier-3 knob has regressed across nightly releases.
+    # Rows that rebuild std are linked into oxc.so later by TARGET_CC; forcing
+    # this unstable tier-3 knob has regressed across nightly releases.
     rustflags="$rustflags -Clink-self-contained=no"
 fi
 

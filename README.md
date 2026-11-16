@@ -61,7 +61,15 @@ float Cortex-A7/A9 rows disable FP registers and NEON entirely; Cortex-A5 and
 the VFPv3-D16 Cortex-A9 row disable D32 and NEON; NEON/VFPv4 Cortex-A7/A15
 rows explicitly enable NEON. The resulting ARM ELF attributes are checked on
 both the runtime and `oxc.so`, so selecting a CPU cannot silently introduce
-instructions absent from that OpenWrt subtype.
+instructions absent from that OpenWrt subtype. The soft/no-FP and D16 rows
+also rebuild the Rust standard library from source (like the MIPS tier-3
+rows): the published std is compiled for generic ARMv7 with its default VFP
+features, and reusing it would both falsify the checked attributes and emit
+VFP/NEON opcodes those boards cannot execute.
+
+MIPS32 and ARMv5 rows additionally link `libatomic` for QuickJS's 64-bit
+`Atomics` operations, which have no native instruction on those CPUs, and
+declare the matching OpenWrt `libatomic` package dependency.
 
 ARMv5, ARMv6, and MIPS32 OpenWrt rows disable WAMR in the first version until
 its native-call ABI is proven, while the cno core and OXC remain enabled.

@@ -208,6 +208,22 @@ if [ -x "$sdk_dir/scripts/feeds" ]; then
     )
 fi
 
+# QuickJS uses 64-bit __atomic intrinsics. MIPS32 and ARMv5 have no native
+# instruction for them, so the compiled code calls into libatomic and the
+# package must declare that runtime dependency.
+libatomic_needed=0
+case $rust_target in
+    mips-*|mipsel-*|armv5te-*) libatomic_needed=1 ;;
+esac
+# The Cortex-A5 FPU implements VFPv4-D16 only, while the SDK toolchain defaults
+# to a D32-capable vfpv4 selection. The Cortex-A9 D16 rows already receive a
+# D16 FPU from the SDK toolchain configuration, so only the A5 row needs the
+# explicit override; appending it after the default flags lets GCC pick it.
+arm_fpu_d16=
+if [ "$rust_features" = arm-hard-d16 ] && [ "$cpu_tune" = cortex-a5 ]; then
+    arm_fpu_d16=vfpv4-d16
+fi
+
 sdk_make() {
     (
         cd "$sdk_dir"
@@ -225,6 +241,8 @@ sdk_make() {
             CNO_TARGET_FLOAT_ABI="$float_abi" \
             CNO_WASM="$wasm" \
             CNO_WAMR_TARGET="$wamr_target" \
+            CNO_NEED_LIBATOMIC="$libatomic_needed" \
+            CNO_ARM_FPU_D16="$arm_fpu_d16" \
             "$@"
     )
 }
@@ -444,12 +462,27 @@ case $format in
             \( -type f -o -type l \) -path '*/bin/apk' -print 2>/dev/null | head -n 1)
         [ -n "$host_apk" ] && [ -x "$host_apk" ] \
             || die 'cannot find the SDK host apk tool for ADB package extraction'
-        # OpenWrt snapshot packages use apk-tools v3's ADB format, so they
-        # cannot be unpacked as Alpine-style gzip tarballs. Extracting directly
-        # also avoids asking the solver to resolve target dependencies in this
-        # deliberately empty root. The QEMU smoke test below supplies their
-        # target DSOs from the SDK staging sysroot.
-        "$host_apk" extract --destination "$packaged_root" --no-chown "$package_abs"
+        # Snapshot SDKs sign their packages with a build key generated in the
+        # SDK root, which no installed keyring trusts. Keep signature
+        # verification on by trusting the SDK's own public build key, and fall
+        # back to the documented untrusted install only when that file is
+        # absent. OpenWrt snapshot packages use apk-tools v3's ADB format, so
+        # they cannot be unpacked as Alpine-style gzip tarballs. Extracting
+        # directly also avoids asking the solver to resolve target
+        # dependencies in this deliberately empty root. The QEMU smoke test
+        # below supplies their target DSOs from the SDK staging sysroot.
+        keys_dir="$work/apk-keys"
+        mkdir -p "$keys_dir"
+        untrusted=
+        if [ -f "$sdk_dir/key-build.pub" ]; then
+            cp "$sdk_dir/key-build.pub" "$keys_dir/key-build.pub"
+        else
+            untrusted=--allow-untrusted
+            printf '%s\n' '[openwrt-apk] SDK has no key-build.pub; extracting untrusted' >&2
+        fi
+        # shellcheck disable=SC2086
+        "$host_apk" --keys-dir "$keys_dir" $untrusted \
+            extract --destination "$packaged_root" --no-chown "$package_abs"
         ;;
 esac
 assert_staged_payload "$packaged_root"

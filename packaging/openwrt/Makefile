@@ -28,6 +28,18 @@ PKG_MAINTAINER:=cno maintainers <imzlh@users.noreply.github.com>
 include $(INCLUDE_DIR)/package.mk
 include $(INCLUDE_DIR)/cmake.mk
 
+# Rows without native 64-bit atomic instructions link libatomic for QuickJS.
+ifeq ($(CNO_NEED_LIBATOMIC),1)
+CNO_OPENWRT_DEPENDS+=+libatomic
+endif
+
+# The Cortex-A5 FPU is VFPv4-D16 while the SDK toolchain defaults to a
+# D32-capable selection; appending the exact D16 FPU after the default flags
+# makes the final -mfpu win and keeps generated code on real hardware.
+ifneq ($(CNO_ARM_FPU_D16),)
+TARGET_CFLAGS+=-mfpu=$(CNO_ARM_FPU_D16)
+endif
+
 CNO_TARGET_BIN_DIR:=$(CMAKE_BINARY_DIR)/bin
 CNO_EXT_DIR:=$(PKG_BUILD_DIR)/openwrt-ext
 CNO_CJSC_WRAPPER:=$(PKG_BUILD_DIR)/run-target-cjsc

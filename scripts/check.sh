@@ -121,7 +121,10 @@ dynamic_symbol_read_count=$(grep -Fc \
     "$CNO_BUILDS_ROOT/scripts/verify-openwrt-elf.sh")
 [ "$dynamic_symbol_read_count" -eq 2 ] \
     || die 'OpenWrt ELF export checks must read symbols through the dynamic section'
-grep -Fq '"$host_apk" extract --destination "$packaged_root"' \
+grep -Fq '"$host_apk" --keys-dir "$keys_dir" $untrusted' \
+    "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" \
+    || die 'OpenWrt APK extraction must keep the documented signature policy'
+grep -Fq 'extract --destination "$packaged_root" --no-chown "$package_abs"' \
     "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" \
     || die 'OpenWrt APK validation must extract ADB payloads without dependency solving'
 grep -Fq -- "-path '*/cno/usr/lib/cno/cno'" \

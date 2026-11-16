@@ -53,16 +53,29 @@ needed_sonames "$work/root/usr/lib/cno/ext/oxc.so" >> "$pending"
 # Populate a private target root with the SDK's runtime libraries. This lets
 # QEMU exercise exactly the same shared objects declared as package
 # dependencies, without borrowing the host distribution's ABI.
+# 64-bit toolchains carry a lib64 symlink pointing back at the lib directory
+# itself; dereferencing it (cp -L) recurses forever. Copy entries one by one
+# and skip such aliases: the musl loader and libraries live in /lib.
+copy_runtime_dir() {
+    src_dir=$1
+    dest_dir=$2
+    [ -d "$src_dir" ] || return 0
+    for entry in "$src_dir"/* "$src_dir"/.[!.]* "$src_dir"/..?*; do
+        [ -e "$entry" ] || [ -L "$entry" ] || continue
+        case ${entry##*/} in lib64) continue ;; esac
+        cp -aL "$entry" "$dest_dir/" || exit 1
+    done
+}
 mkdir -p "$work/root/lib" "$work/root/usr/lib"
 find "$sdk/staging_dir" -mindepth 1 -maxdepth 1 -type d -name 'toolchain-*' -print \
     | while IFS= read -r toolchain; do
-        [ ! -d "$toolchain/lib" ] || cp -aL "$toolchain/lib/." "$work/root/lib/"
-        [ ! -d "$toolchain/usr/lib" ] || cp -aL "$toolchain/usr/lib/." "$work/root/usr/lib/"
+        copy_runtime_dir "$toolchain/lib" "$work/root/lib"
+        copy_runtime_dir "$toolchain/usr/lib" "$work/root/usr/lib"
     done
 find "$sdk/staging_dir" -mindepth 1 -maxdepth 1 -type d -name 'target-*' -print \
     | while IFS= read -r staging; do
-        [ ! -d "$staging/lib" ] || cp -aL "$staging/lib/." "$work/root/lib/"
-        [ ! -d "$staging/usr/lib" ] || cp -aL "$staging/usr/lib/." "$work/root/usr/lib/"
+        copy_runtime_dir "$staging/lib" "$work/root/lib"
+        copy_runtime_dir "$staging/usr/lib" "$work/root/usr/lib"
     done
 [ -f "$work/root$interpreter" ] || {
     printf 'target loader not found in SDK runtime root: %s\n' "$interpreter" >&2
