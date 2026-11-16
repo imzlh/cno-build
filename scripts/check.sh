@@ -68,6 +68,9 @@ grep -Fq '[openwrt-sdk] parallel build failed; retrying package/cno serially' \
 grep -Fq "'CONFIG_LIBCURL_OPENSSL=y'" \
     "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" \
     || die 'OpenWrt libcurl must use the explicitly selected OpenSSL backend'
+grep -Fq "'CONFIG_PACKAGE_libopenssl=m'" \
+    "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" \
+    || die 'OpenWrt configuration must explicitly seed the libopenssl package'
 grep -Fq "'^CONFIG_PACKAGE_libopenssl=[my]$'" \
     "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" \
     || die 'OpenWrt configuration must verify that libopenssl was selected'

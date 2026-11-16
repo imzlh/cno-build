@@ -43,8 +43,11 @@ no private `$ORIGIN/lib` bundle is made.
 
 The SDK configuration must also select `CONFIG_LIBCURL_OPENSSL=y`. Merely
 selecting both the `libcurl` and `libopenssl` packages does not choose curl's
-TLS backend in every SDK release; snapshots reject an HTTPS-enabled curl build
-when all TLS backends are disabled.
+TLS backend in every SDK release. Conversely, some snapshot SDKs retain that
+backend choice without promoting its conditional dependency to a selected
+package. Seed the logical `libcurl` and `libopenssl` packages together with the
+choice; snapshots reject an HTTPS-enabled curl build when no usable TLS backend
+is selected or detected.
 
 The Rust archive is only one half of OXC.  `Makefile` compiles and links the C
 binding with that SDK's `TARGET_CC`, `TARGET_CFLAGS`, and `TARGET_LDFLAGS`, so

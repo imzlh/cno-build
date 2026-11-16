@@ -188,10 +188,13 @@ grep -q '^CONFIG_PACKAGE_cno=m$' "$sdk_dir/.config" \
     || die 'SDK defconfig did not retain CONFIG_PACKAGE_cno=m'
 
 # cno uses OpenSSL directly. Select the same backend for libcurl explicitly so
-# SDKs cannot retain HTTPS while leaving every TLS implementation disabled.
-# First selecting cno makes the libcurl Kconfig choice visible; now remove all
-# old sides of that choice before selecting OpenSSL and normalizing once more.
+# SDKs cannot retain HTTPS without a usable TLS implementation. First selecting
+# cno makes the libcurl Kconfig choice visible; now remove the package and
+# choice values before seeding the logical packages and OpenSSL backend. Some
+# snapshot SDKs do not promote libcurl's conditional dependency to a selected
+# package, so relying on CONFIG_LIBCURL_OPENSSL alone is insufficient.
 for config_name in \
+    PACKAGE_libcurl PACKAGE_libopenssl \
     LIBCURL_WOLFSSL LIBCURL_GNUTLS LIBCURL_OPENSSL \
     LIBCURL_MBEDTLS LIBCURL_NOSSL
 do
@@ -199,7 +202,10 @@ do
         "/^CONFIG_${config_name}=/d;/^# CONFIG_${config_name} is not set$/d" \
         "$sdk_dir/.config"
 done
-printf '%s\n' 'CONFIG_LIBCURL_OPENSSL=y' >> "$sdk_dir/.config"
+printf '%s\n' \
+    'CONFIG_PACKAGE_libcurl=m' \
+    'CONFIG_PACKAGE_libopenssl=m' \
+    'CONFIG_LIBCURL_OPENSSL=y' >> "$sdk_dir/.config"
 sdk_make defconfig
 grep -q '^CONFIG_LIBCURL_OPENSSL=y$' "$sdk_dir/.config" \
     || die 'SDK defconfig did not retain the libcurl OpenSSL backend'
