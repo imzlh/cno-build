@@ -41,6 +41,9 @@ failure_fixture=$(make_temp_dir)
 failure_log="$failure_fixture/parallel-failure.log"
 cat > "$failure_log" <<'EOF'
 [ 41%] Building dependency
+-- Could NOT find OpenSSL (missing: OPENSSL_CRYPTO_LIBRARY OPENSSL_INCLUDE_DIR)
+-- Could NOT find Libevent (missing: LIBEVENT_CORE_LIBRARY)
+(missing: optional dependency)
 src/runtime.c:17:9: error: unknown type name 'fixture_type'
 make[4]: *** [runtime.o] Error 1
 dependency: successful cleanup after unrelated parallel work
@@ -51,7 +54,7 @@ failure_report=$(sh "$CNO_BUILDS_ROOT/scripts/report-build-failure.sh" \
     "$failure_log" 'fixture failed' 2>&1)
 rm -rf -- "$failure_fixture"
 printf '%s\n' "$failure_report" | grep -Fq \
-    "First high-signal diagnostic (log line 2):%0Asrc/runtime.c:17:9: error: unknown type name 'fixture_type'" \
+    "First high-signal diagnostic (log line 5):%0Asrc/runtime.c:17:9: error: unknown type name 'fixture_type'" \
     || die 'failure reporter did not preserve the first compiler diagnostic'
 printf '%s\n' "$failure_report" | grep -Fq \
     'make: *** [include/toplevel.mk:226: package/cno/compile] Error 2' \
@@ -59,6 +62,12 @@ printf '%s\n' "$failure_report" | grep -Fq \
 grep -Fq 'sh scripts/report-build-failure.sh "$log"' \
     "$CNO_BUILDS_ROOT/.github/workflows/packages.yml" \
     || die 'package workflow does not use the structured failure reporter'
+grep -Fq '[openwrt-sdk] parallel build failed; retrying package/cno serially' \
+    "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" \
+    || die 'OpenWrt failures must be retried serially for deterministic diagnostics'
+grep -Fq 'name: Upload OpenWrt failure log' \
+    "$CNO_BUILDS_ROOT/.github/workflows/packages.yml" \
+    || die 'OpenWrt failures must preserve their complete logs'
 
 for table_spec in \
     "$CNO_BUILDS_ROOT/config/debian-targets.tsv:4" \

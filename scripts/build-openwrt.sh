@@ -224,7 +224,13 @@ printf '[openwrt-sdk] TARGET_CFLAGS=%s\n' "${target_cflags:-<reported in compile
 openwrt_jobs=${CNO_OPENWRT_JOBS:-2}
 case $openwrt_jobs in ''|*[!0-9]*) die "invalid CNO_OPENWRT_JOBS: $openwrt_jobs" ;; esac
 [ "$openwrt_jobs" -gt 0 ] || die 'CNO_OPENWRT_JOBS must be positive'
-sdk_make -j"$openwrt_jobs" package/cno/compile V=sc
+if ! sdk_make -j"$openwrt_jobs" package/cno/compile V=sc; then
+    # Parallel dependency output can continue after package/cno has already
+    # failed and bury the useful compiler line. Reuse the populated SDK and
+    # retry serially so the fatal command and its diagnostic remain adjacent.
+    printf '%s\n' '[openwrt-sdk] parallel build failed; retrying package/cno serially' >&2
+    sdk_make -j1 package/cno/compile V=sc
+fi
 
 package=$(find "$sdk_dir/bin/packages" -type f \( -name "cno[-_]*.$format" -o -name "cno.$format" \) \
     ! -name '*-dbg*' -print \

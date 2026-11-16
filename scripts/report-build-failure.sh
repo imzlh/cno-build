@@ -15,8 +15,11 @@ work=$(mktemp -d "$temp_parent/cno-build-report.XXXXXX")
 trap 'rm -rf -- "$work"' EXIT HUP INT TERM
 
 # Parallel package builds often keep printing successful dependency output
-# after cno itself has failed.  Prefer the first compiler/configure diagnostic
-# over the final top-level make error, then retain the true end of the log too.
+# after cno itself has failed. Prefer the first fatal compiler/configure
+# diagnostic over the final top-level make error, then retain the true end of
+# the log too. CMake's `-- Could NOT find ...` status lines are deliberately
+# excluded: dependency projects such as nghttp2 print them for optional
+# features and continue configuring successfully.
 first_diagnostic=$(
     awk '
         {
@@ -24,7 +27,9 @@ first_diagnostic=$(
             if (text ~ /fatal error:|(^|[[:space:]])error:|failed:/ ||
                 text ~ /cmake error|configure: error|undefined reference/ ||
                 text ~ /collect2: error|ninja:.*build stopped/ ||
-                text ~ /could not find|cannot find|unable to select packages/) {
+                text ~ /cannot find[[:space:]]+-l|unable to select packages/ ||
+                text ~ /segmentation fault|illegal instruction|bus error/ ||
+                text ~ /exec format error/) {
                 print NR
                 exit
             }
@@ -38,6 +43,7 @@ if [ -z "$first_diagnostic" ]; then
             {
                 text = tolower($0)
                 if (text ~ /no rule to make target|no such file or directory/ ||
+                    text ~ /cannot find|command not found/ ||
                     text ~ /make(\[[0-9]+\])?: \*\*\*.*error [0-9]+/) {
                     print NR
                     exit
