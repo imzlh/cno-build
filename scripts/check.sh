@@ -23,6 +23,43 @@ shellcheck -x -s sh \
     -P "$CNO_BUILDS_ROOT/scripts/lib" \
     "$CNO_BUILDS_ROOT"/scripts/*.sh "$CNO_BUILDS_ROOT"/scripts/lib/*.sh
 
+# Alpine's abuild invokes apk again to install the generated .makedepends
+# package. A no-cache bootstrap discards the repository indexes before that
+# second invocation, making even ordinary runtime dependencies unresolvable.
+grep -Fq 'apk add --update-cache alpine-sdk openssl coreutils' \
+    "$CNO_BUILDS_ROOT/.github/workflows/packages.yml" \
+    || die 'Alpine bootstrap must preserve apk indexes for abuild dependencies'
+if grep -Fq 'apk add --no-cache alpine-sdk openssl coreutils' \
+    "$CNO_BUILDS_ROOT/.github/workflows/packages.yml"; then
+    die 'Alpine bootstrap must not discard indexes before abuild runs'
+fi
+
+# Failure annotations must expose the first useful diagnostic as well as the
+# final make output. Parallel OpenWrt dependencies commonly finish after cno
+# fails and otherwise push the real compiler error out of a tail-only report.
+failure_fixture=$(make_temp_dir)
+failure_log="$failure_fixture/parallel-failure.log"
+cat > "$failure_log" <<'EOF'
+[ 41%] Building dependency
+src/runtime.c:17:9: error: unknown type name 'fixture_type'
+make[4]: *** [runtime.o] Error 1
+dependency: successful cleanup after unrelated parallel work
+time: package/feeds/packages/libffi/compile#3.96#4.85#6.79
+make: *** [include/toplevel.mk:226: package/cno/compile] Error 2
+EOF
+failure_report=$(sh "$CNO_BUILDS_ROOT/scripts/report-build-failure.sh" \
+    "$failure_log" 'fixture failed' 2>&1)
+rm -rf -- "$failure_fixture"
+printf '%s\n' "$failure_report" | grep -Fq \
+    "First high-signal diagnostic (log line 2):%0Asrc/runtime.c:17:9: error: unknown type name 'fixture_type'" \
+    || die 'failure reporter did not preserve the first compiler diagnostic'
+printf '%s\n' "$failure_report" | grep -Fq \
+    'make: *** [include/toplevel.mk:226: package/cno/compile] Error 2' \
+    || die 'failure reporter did not preserve the final build error'
+grep -Fq 'sh scripts/report-build-failure.sh "$log"' \
+    "$CNO_BUILDS_ROOT/.github/workflows/packages.yml" \
+    || die 'package workflow does not use the structured failure reporter'
+
 for table_spec in \
     "$CNO_BUILDS_ROOT/config/debian-targets.tsv:4" \
     "$CNO_BUILDS_ROOT/config/alpine-targets.tsv:3" \

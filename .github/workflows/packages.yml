@@ -384,10 +384,14 @@ jobs:
               | base64 --decode > work/alpine/release-signing.rsa
             chmod 0600 work/alpine/release-signing.rsa
           fi
+          log="$RUNNER_TEMP/alpine-$ALPINE_ARCH.log"
+          set +e
           docker run --rm --platform "$PLATFORM" \
             -e VERSION -e EPOCH -e ALPINE_ARCH -e CNO_TARGET \
             -v "$GITHUB_WORKSPACE:/work" -w /work alpine:3.21 sh -eux -c '
-              apk add --no-cache alpine-sdk openssl coreutils
+              # abuild installs the APKBUILD dependencies in a later apk
+              # invocation. Keep repository indexes cached for that command.
+              apk add --update-cache alpine-sdk openssl coreutils
               adduser -D builder
               addgroup builder abuild
               chown -R builder:builder /work/work/alpine "/work/dist/alpine/$ALPINE_ARCH"
@@ -403,7 +407,14 @@ jobs:
                 sh /work/scripts/build-alpine.sh $VERSION $ALPINE_ARCH \
                 /work/downloads/cno-linux-musl-dynamic-$CNO_TARGET.tar.gz \
                 /work/dist/alpine/$ALPINE_ARCH $EPOCH"
-            '
+            ' 2>&1 | tee "$log"
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -ne 0 ]; then
+            sh scripts/report-build-failure.sh "$log" \
+              "Alpine $ALPINE_ARCH build failed"
+            exit "$status"
+          fi
       - name: Install, execute and uninstall in clean Alpine
         env:
           PLATFORM: ${{ matrix.platform }}
@@ -522,19 +533,8 @@ jobs:
           status=${PIPESTATUS[0]}
           set -e
           if [ "$status" -ne 0 ]; then
-            {
-              echo "::group::OpenWrt $FORMAT $TARGET/$SUBTARGET failure tail"
-              tail -n 200 "$log"
-              echo '::endgroup::'
-            } >&2
-            # GitHub renders only the first few KiB of a workflow-command
-            # annotation. Keep the actual end of the log inside that limit so
-            # the build error cannot be truncated behind earlier output.
-            annotation=$(tail -c 3000 "$log")
-            annotation=${annotation//'%'/'%25'}
-            annotation=${annotation//$'\r'/'%0D'}
-            annotation=${annotation//$'\n'/'%0A'}
-            echo "::error title=OpenWrt $FORMAT $TARGET/$SUBTARGET failed::$annotation" >&2
+            sh scripts/report-build-failure.sh "$log" \
+              "OpenWrt $FORMAT $TARGET/$SUBTARGET failed"
             exit "$status"
           fi
       - uses: actions/upload-artifact@v4
