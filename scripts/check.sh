@@ -135,7 +135,15 @@ grep -Fq 'scripts/normalize-openwrt-depends.sh' \
 grep -Fq 'ln -s ../../../feeds/packages/net/curl "$curl_recipe"' \
     "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" \
     || die 'OpenWrt must link the SDK-pinned curl source recipe directly'
-grep -Fq 'ln -s ../../../feeds/base/package/libs/openssl "$openssl_recipe"' \
+for openssl_layout in package/libs/openssl libs/openssl; do
+    grep -Fq "feeds/base/$openssl_layout" \
+        "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" \
+        || die "OpenWrt must accept the base-feed OpenSSL layout $openssl_layout"
+done
+grep -Fq 'base feed contains ambiguous OpenSSL recipes' \
+    "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" \
+    || die 'OpenWrt must reject ambiguous base-feed OpenSSL layouts'
+grep -Fq 'ln -s "../../../$openssl_source" "$openssl_recipe"' \
     "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" \
     || die 'OpenWrt must link the SDK-pinned OpenSSL source recipe directly'
 grep -Fq 'refusing to replace non-symlink curl recipe' \

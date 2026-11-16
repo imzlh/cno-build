@@ -56,6 +56,10 @@ used because they recursively install recipes for every conditional dependency,
 including disabled LDAP, HTTP/3, alternate TLS backends, and OpenSSL engines.
 The pinned curl and OpenSSL source recipes are linked directly after installing
 only the active zlib, HTTP/2, certificate, and cno dependency closure.
+OpenWrt 24.10 stores that base-feed OpenSSL recipe under
+`package/libs/openssl`, while snapshots store it under `libs/openssl`; the
+builder accepts exactly one of those pinned layouts and rejects an ambiguous or
+unknown layout.
 
 Before linking curl, its SDK-local recipe is normalized fail-closed. The active
 OpenSSL, zlib, and HTTP/2 dependencies become unconditional package edges, and

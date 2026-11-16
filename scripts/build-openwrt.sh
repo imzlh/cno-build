@@ -174,11 +174,22 @@ if [ -x "$sdk_dir/scripts/feeds" ]; then
 
         [ -f feeds/packages/net/curl/Makefile ] \
             || die 'packages feed does not contain the curl recipe'
-        [ -f feeds/base/package/libs/openssl/Makefile ] \
-            || die 'base feed does not contain the OpenSSL recipe'
+        openssl_source=
+        for candidate in \
+            feeds/base/package/libs/openssl \
+            feeds/base/libs/openssl
+        do
+            if [ -f "$candidate/Makefile" ]; then
+                [ -z "$openssl_source" ] \
+                    || die "base feed contains ambiguous OpenSSL recipes: $openssl_source and $candidate"
+                openssl_source=$candidate
+            fi
+        done
+        [ -n "$openssl_source" ] \
+            || die 'base feed does not contain the OpenSSL recipe in a supported layout'
         sh "$CNO_BUILDS_ROOT/scripts/normalize-openwrt-depends.sh" \
             feeds/packages/net/curl/Makefile \
-            feeds/base/package/libs/openssl/Makefile
+            "$openssl_source/Makefile"
         mkdir -p package/feeds/base package/feeds/packages
         openssl_recipe=package/feeds/base/openssl
         if [ -e "$openssl_recipe" ] || [ -L "$openssl_recipe" ]; then
@@ -186,7 +197,7 @@ if [ -x "$sdk_dir/scripts/feeds" ]; then
                 || die "refusing to replace non-symlink OpenSSL recipe: $openssl_recipe"
             rm -f -- "$openssl_recipe"
         fi
-        ln -s ../../../feeds/base/package/libs/openssl "$openssl_recipe"
+        ln -s "../../../$openssl_source" "$openssl_recipe"
         curl_recipe=package/feeds/packages/curl
         if [ -e "$curl_recipe" ] || [ -L "$curl_recipe" ]; then
             [ -L "$curl_recipe" ] \
