@@ -166,13 +166,17 @@ initial_defconfig_line=$(grep -n '^sdk_defconfig initial$' \
     "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" | cut -d: -f1)
 [ -n "$initial_defconfig_line" ] \
     || die 'OpenWrt build must run an initial checked defconfig'
-for buildbot_option in ALL_NONSHARED ALL_KMODS; do
+config_touch_line=$(grep -nF 'touch "$sdk_dir/.config"' \
+    "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" | head -n 1 | cut -d: -f1)
+[ -n "$config_touch_line" ] && [ "$config_touch_line" -lt "$initial_defconfig_line" ] \
+    || die 'OpenWrt must create .config before editing it'
+for buildbot_option in ALL ALL_NONSHARED ALL_KMODS; do
     disabled_line=$(grep -nF "'# CONFIG_${buildbot_option} is not set'" \
         "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" | head -n 1 | cut -d: -f1)
     [ -n "$disabled_line" ] && [ "$disabled_line" -lt "$initial_defconfig_line" ] \
         || die "OpenWrt must disable $buildbot_option before the initial defconfig"
 done
-grep -Fq '"$sdk_dir/.config" ALL_NONSHARED ALL_KMODS' \
+grep -Fq '"$sdk_dir/.config" ALL ALL_NONSHARED ALL_KMODS' \
     "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" \
     || die 'OpenWrt must verify buildbot package defaults stayed disabled'
 grep -Fq "'CONFIG_LIBCURL_OPENSSL=y'" \

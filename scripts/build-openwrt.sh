@@ -249,22 +249,23 @@ sdk_defconfig() {
     fi
 }
 
-# Published SDKs are prepared for buildbot coverage and can arrive with both
-# switches enabled. Disable them before the first defconfig; once expanded,
-# their blanket PACKAGE_*=m selections are not reliably undone by clearing the
-# parent switches later. The cno dependency closure is selected explicitly
-# below instead.
-for config_name in ALL_NONSHARED ALL_KMODS; do
+# Published SDKs default ALL to y, which also enables ALL_NONSHARED and
+# ALL_KMODS. Disable all three before the first defconfig; once expanded, their
+# blanket PACKAGE_*=m selections are not reliably undone by clearing the parent
+# switches later. A freshly extracted SDK may not contain .config yet.
+touch "$sdk_dir/.config"
+for config_name in ALL ALL_NONSHARED ALL_KMODS; do
     sed -i \
         "/^CONFIG_${config_name}=/d;/^# CONFIG_${config_name} is not set$/d" \
         "$sdk_dir/.config"
 done
 printf '%s\n' \
+    '# CONFIG_ALL is not set' \
     '# CONFIG_ALL_NONSHARED is not set' \
     '# CONFIG_ALL_KMODS is not set' >> "$sdk_dir/.config"
 sdk_defconfig initial
 sh "$CNO_BUILDS_ROOT/scripts/verify-openwrt-disabled-options.sh" \
-    "$sdk_dir/.config" ALL_NONSHARED ALL_KMODS
+    "$sdk_dir/.config" ALL ALL_NONSHARED ALL_KMODS
 sed -i '/^# CONFIG_PACKAGE_cno is not set$/d;/^CONFIG_PACKAGE_cno=/d' "$sdk_dir/.config"
 printf '%s\n' 'CONFIG_PACKAGE_cno=m' >> "$sdk_dir/.config"
 # defconfig consumes the explicit package selection and its dependencies.

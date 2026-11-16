@@ -79,10 +79,11 @@ curl's unconditional dependency. Any unsafe upstream dependency-shape drift
 aborts before `defconfig`.
 
 Before the first `defconfig`, the builder disables the SDK buildbot defaults
-`CONFIG_ALL_NONSHARED` and `CONFIG_ALL_KMODS`. Otherwise that first pass expands
-nearly every non-shared package and kernel module to `m`, pulling unrelated
-hardware engines into the build even though cno does not use them. The builder
-then selects only cno and its active dependency closure explicitly.
+`CONFIG_ALL`, `CONFIG_ALL_NONSHARED`, and `CONFIG_ALL_KMODS`. Otherwise that
+first pass expands nearly every userspace package and kernel module to `m`,
+pulling unrelated hardware engines into the build even though cno does not use
+them. The builder then selects only cno and its active dependency closure
+explicitly.
 
 After `defconfig`, enabled curl features and their packages must still be
 selected. Disabled optional features may appear as `# CONFIG_* is not set` or
