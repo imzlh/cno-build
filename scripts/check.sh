@@ -13,6 +13,17 @@ need_command rg
 need_command rustc
 need_command tar
 
+if grep -Fq 'version: 10.17.1' "$CNO_BUILDS_ROOT/.github/workflows/packages.yml"; then
+    die 'package workflow must use the pnpm version declared by cno-cli'
+fi
+[ "$(grep -Fc -- '--frozen-lockfile --allow-build=esbuild' \
+    "$CNO_BUILDS_ROOT/scripts/prepare-openwrt-source.sh")" -eq 3 ] \
+    || die 'all cno source installs must approve only the esbuild lifecycle script'
+if grep -Fq -- '--dangerously-allow-all-builds' \
+    "$CNO_BUILDS_ROOT/scripts/prepare-openwrt-source.sh"; then
+    die 'cno source preparation must not allow every dependency lifecycle script'
+fi
+
 find "$CNO_BUILDS_ROOT/scripts" -type f -name '*.sh' -print | sort \
     | while IFS= read -r script; do sh -n "$script"; done
 # common.sh is a sourced library and intentionally has no shebang invocation.
