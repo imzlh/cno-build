@@ -91,10 +91,12 @@ define Build/Configure
 		cp -a $(STAGING_DIR)/usr/lib/. $(CNO_QEMU_ROOT)/usr/lib/; \
 	fi
 	printf '%s\n' '#!/bin/sh' \
-		'exec $(CNO_QEMU) -L "$(CNO_QEMU_ROOT)" "$(CNO_TARGET_BIN_DIR)/cjsc" "$$$$@"' \
+		'unset LD_PRELOAD LD_LIBRARY_PATH RUNAS_ARG0' \
+		'exec "$(CNO_QEMU)" -L "$(CNO_QEMU_ROOT)" "$(CNO_TARGET_BIN_DIR)/cjsc" "$$$$@"' \
 		> $(CNO_CJSC_WRAPPER)
 	printf '%s\n' '#!/bin/sh' \
-		'exec $(CNO_QEMU) -L "$(CNO_QEMU_ROOT)" "$(CNO_TARGET_BIN_DIR)/qjsc" "$$$$@"' \
+		'unset LD_PRELOAD LD_LIBRARY_PATH RUNAS_ARG0' \
+		'exec "$(CNO_QEMU)" -L "$(CNO_QEMU_ROOT)" "$(CNO_TARGET_BIN_DIR)/qjsc" "$$$$@"' \
 		> $(CNO_QJSC_WRAPPER)
 	chmod 0755 $(CNO_CJSC_WRAPPER) $(CNO_QJSC_WRAPPER)
 	$(call Build/Configure/Default)

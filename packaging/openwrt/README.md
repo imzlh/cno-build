@@ -25,7 +25,7 @@ CNO_BUNDLE_FILE           host-generated cno-cli.min.js
 CNO_BUNDLE_SHA256         SHA-256 of the bundle
 CNO_OXC_ARCHIVE           target Rust staticlib produced per matrix row
 CNO_OXC_SHA256            SHA-256 of the Rust staticlib
-CNO_QEMU                  qemu-user executable for this target
+CNO_QEMU                  absolute system qemu-user executable for this target
 CNO_BIG_ENDIAN            1 only for big-endian targets
 CNO_TARGET_FLOAT_ABI      explicit none, soft, or hard calling ABI assertion
 CNO_WASM                  ON or OFF
@@ -41,26 +41,43 @@ stage development files, then adds ABI suffixes to final runtime dependencies
 itself.  The intended linkage is dynamic against OpenWrt's target libraries;
 no private `$ORIGIN/lib` bundle is made.
 
-The SDK configuration must also select `CONFIG_LIBCURL_OPENSSL=y`. Merely
-selecting both the `libcurl` and `libopenssl` packages does not choose curl's
-TLS backend in every SDK release. Conversely, some snapshot SDKs retain that
-backend choice without promoting its conditional dependency to a selected
-package. Seed the logical `libcurl` and `libopenssl` packages together with the
-choice; snapshots reject an HTTPS-enabled curl build when no usable TLS backend
-is selected or detected.
+The SDK configuration explicitly selects OpenSSL, zlib, and HTTP/2 support for
+libcurl and seeds their logical packages: `libopenssl`, `zlib`, and
+`libnghttp2`. Merely selecting `libcurl` does not choose a TLS backend reliably
+across SDK releases. All other curl options with conditional package
+dependencies are explicitly disabled.
 
 The SDK's own `feeds.conf.default` pins both its OpenWrt base source and the
 packages feed. Both indexes must be updated: SDK archives contain only a small
 subset of core recipes, while OpenSSL, zlib, and CA certificates come from the
-pinned base source. Only cno's dependency recipes are then installed from base
-and packages. Installing a complete feed exposes unrelated package Kconfig, so
-a recursive dependency in another recipe can make `defconfig` write an
-incomplete `.config` even when it exits successfully. Every `defconfig`
-invocation is therefore also checked for recursive-dependency diagnostics.
+pinned base source. Only cno's active dependency recipes are installed.
+`scripts/feeds install libcurl` and `scripts/feeds install openssl` must not be
+used because they recursively install recipes for every conditional dependency,
+including disabled LDAP, HTTP/3, alternate TLS backends, and OpenSSL engines.
+The pinned curl and OpenSSL source recipes are linked directly after installing
+only the active zlib, HTTP/2, certificate, and cno dependency closure.
+
+Before linking curl, its SDK-local recipe is normalized fail-closed. The active
+OpenSSL, zlib, and HTTP/2 dependencies become unconditional package edges, and
+all disabled conditional package edges are removed. Every audited source token
+must occur exactly once, all conditional dependency tokens must be absent
+afterward, and the four resulting dependencies (`libopenssl`, `zlib`,
+`libnghttp2`, and `ca-bundle`) must each occur exactly once. This prevents
+OpenWrt package metadata from generating `PACKAGE_libcurl` / `LIBCURL_*`
+structural Kconfig cycles. Any recursive-dependency diagnostic remains fatal.
+The SDK-local OpenSSL recipe is normalized by the same helper: its compression,
+AFALG, devcrypto, and Padlock conditional dependency tokens must each occur
+exactly once and are removed because all four features are explicitly disabled.
+Zlib remains staged through curl's unconditional dependency. Any upstream token
+count or dependency-shape drift aborts before `defconfig`.
 
 The Rust archive is only one half of OXC.  `Makefile` compiles and links the C
 binding with that SDK's `TARGET_CC`, `TARGET_CFLAGS`, and `TARGET_LDFLAGS`, so
 the module receives the same endianness, float ABI, and platform flags as cno.
+The caller resolves `CNO_QEMU` before entering the SDK environment. Target
+`cjsc` and `qjsc` wrappers also clear host loader variables before executing
+that absolute path, so an SDK host wrapper cannot inject `runas.so` into a
+target musl process.
 
 ## Matrix contract
 

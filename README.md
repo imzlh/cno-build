@@ -107,6 +107,12 @@ gh api --method POST repos/OWNER/cno-builds/dispatches \
   -F 'client_payload={"tag":"v1.1.0","publish":true}'
 ```
 
+During each build, the matching public key is supplied to abuild's local
+`apk index` operation through a per-build trusted-key directory. This keeps
+package and repository-index signature verification enabled for both the
+durable release key and temporary trial keys; the public key is also included
+in the artifact for installation on target systems.
+
 Published releases use `packages-v<version>-r<package-release>`, separate from
 cno-cli source tags. The release contains package files, Alpine public keys,
 OpenWrt build provenance, and `SHA256SUMS.txt`.

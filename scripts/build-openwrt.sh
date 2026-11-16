@@ -63,6 +63,16 @@ for command_name in curl sha256sum tar make "$emulator" readelf rustup cargo; do
     need_command "$command_name"
 done
 if [ "$format" = ipk ]; then need_command ar; fi
+# Resolve qemu-user before entering the SDK make environment. OpenWrt prepends
+# staging_dir/host/bin to PATH, where a same-named host wrapper may inject its
+# x86_64 runas.so through LD_PRELOAD. Passing an absolute system executable
+# keeps that host wrapper out of target cjsc/qjsc invocations.
+emulator_path=$(command -v "$emulator")
+case $emulator_path in
+    /*) ;;
+    *) die "qemu-user executable did not resolve to an absolute path: $emulator_path" ;;
+esac
+[ -x "$emulator_path" ] || die "qemu-user executable is not executable: $emulator_path"
 
 if [ "$release" = snapshots ]; then
     sdk_base="https://downloads.openwrt.org/snapshots/targets/$target/$subtarget"
@@ -150,15 +160,40 @@ cp "$oxc_archive" "$sdk_dir/dl/$oxc_name"
 
 # The SDK is deliberately stripped down. Its feeds.conf.default supplies a
 # pinned base feed for core recipes and a packages feed for community recipes.
-# Install only cno's required recipes and their dependencies. Installing an
-# entire feed adds unrelated Kconfig entries; a broken package elsewhere in a
-# feed must not make cno's defconfig incomplete.
+# Install only the recipes in cno's active dependency closure. In particular,
+# do not pass libcurl to scripts/feeds: the feed installer follows every
+# conditional dependency in curl's recipe, including disabled LDAP, HTTP/3,
+# and alternate TLS backends. Link curl itself after installing only the
+# OpenSSL, zlib, and HTTP/2 recipes selected below.
 if [ -x "$sdk_dir/scripts/feeds" ]; then
     (
         cd "$sdk_dir"
         ./scripts/feeds update base packages
-        ./scripts/feeds install -p base openssl zlib ca-certificates
-        ./scripts/feeds install -p packages libcurl libsqlite3 libffi libexpat
+        ./scripts/feeds install -p base zlib ca-certificates
+        ./scripts/feeds install -p packages libsqlite3 libffi libexpat libnghttp2
+
+        [ -f feeds/packages/net/curl/Makefile ] \
+            || die 'packages feed does not contain the curl recipe'
+        [ -f feeds/base/package/libs/openssl/Makefile ] \
+            || die 'base feed does not contain the OpenSSL recipe'
+        sh "$CNO_BUILDS_ROOT/scripts/normalize-openwrt-depends.sh" \
+            feeds/packages/net/curl/Makefile \
+            feeds/base/package/libs/openssl/Makefile
+        mkdir -p package/feeds/base package/feeds/packages
+        openssl_recipe=package/feeds/base/openssl
+        if [ -e "$openssl_recipe" ] || [ -L "$openssl_recipe" ]; then
+            [ -L "$openssl_recipe" ] \
+                || die "refusing to replace non-symlink OpenSSL recipe: $openssl_recipe"
+            rm -f -- "$openssl_recipe"
+        fi
+        ln -s ../../../feeds/base/package/libs/openssl "$openssl_recipe"
+        curl_recipe=package/feeds/packages/curl
+        if [ -e "$curl_recipe" ] || [ -L "$curl_recipe" ]; then
+            [ -L "$curl_recipe" ] \
+                || die "refusing to replace non-symlink curl recipe: $curl_recipe"
+            rm -f -- "$curl_recipe"
+        fi
+        ln -s ../../../feeds/packages/net/curl "$curl_recipe"
     )
 fi
 
@@ -174,7 +209,7 @@ sdk_make() {
             CNO_BUNDLE_SHA256="$bundle_sha256" \
             CNO_OXC_ARCHIVE="$oxc_name" \
             CNO_OXC_SHA256="$oxc_sha256" \
-            CNO_QEMU="$emulator" \
+            CNO_QEMU="$emulator_path" \
             CNO_BIG_ENDIAN="$([ "$endian" = big ] && printf 1 || printf 0)" \
             CNO_TARGET_FLOAT_ABI="$float_abi" \
             CNO_WASM="$wasm" \
@@ -195,7 +230,9 @@ sdk_defconfig() {
     fi
     cat "$defconfig_log"
     # Kconfig can report a recursive dependency yet return success after
-    # writing a partially normalized .config. Never consume that result.
+    # writing a partially normalized .config. The curl and OpenSSL recipe
+    # normalization above removes their conditional package edges, so every
+    # recursion is an unexpected metadata error and remains fatal.
     if grep -Fqi 'recursive dependency detected' "$defconfig_log"; then
         die "SDK defconfig reported a recursive Kconfig dependency during $phase"
     fi
@@ -210,15 +247,18 @@ grep -q '^CONFIG_PACKAGE_cno=m$' "$sdk_dir/.config" \
     || die 'SDK defconfig did not retain CONFIG_PACKAGE_cno=m'
 
 # cno uses OpenSSL directly. Select the same backend for libcurl explicitly so
-# SDKs cannot retain HTTPS without a usable TLS implementation. First selecting
-# cno makes the libcurl Kconfig choice visible; now remove the package and
-# choice values before seeding the logical packages and OpenSSL backend. Some
-# snapshot SDKs do not promote libcurl's conditional dependency to a selected
-# package, so relying on CONFIG_LIBCURL_OPENSSL alone is insufficient.
+# SDKs cannot retain HTTPS without a usable TLS implementation. Keep curl's
+# default HTTP/2 and zlib support, seed every corresponding logical package,
+# and explicitly disable options whose dependency recipes were deliberately
+# left out of package metadata above.
 for config_name in \
-    PACKAGE_libcurl PACKAGE_libopenssl \
+    PACKAGE_libcurl PACKAGE_libopenssl PACKAGE_libnghttp2 PACKAGE_zlib \
     LIBCURL_WOLFSSL LIBCURL_GNUTLS LIBCURL_OPENSSL \
-    LIBCURL_MBEDTLS LIBCURL_NOSSL
+    LIBCURL_MBEDTLS LIBCURL_NOSSL LIBCURL_ZLIB LIBCURL_ZSTD \
+    LIBCURL_THREADED_RESOLVER LIBCURL_LDAP LIBCURL_LIBIDN2 \
+    LIBCURL_SSH2 LIBCURL_HTTP2 LIBCURL_HTTP3 LIBCURL_KERBEROS_AUTH \
+    OPENSSL_WITH_COMPRESSION OPENSSL_ENGINE_BUILTIN_AFALG \
+    OPENSSL_ENGINE_BUILTIN_DEVCRYPTO OPENSSL_ENGINE_BUILTIN_PADLOCK
 do
     sed -i \
         "/^CONFIG_${config_name}=/d;/^# CONFIG_${config_name} is not set$/d" \
@@ -227,19 +267,52 @@ done
 printf '%s\n' \
     'CONFIG_PACKAGE_libcurl=m' \
     'CONFIG_PACKAGE_libopenssl=m' \
-    'CONFIG_LIBCURL_OPENSSL=y' >> "$sdk_dir/.config"
+    'CONFIG_PACKAGE_libnghttp2=m' \
+    'CONFIG_PACKAGE_zlib=m' \
+    'CONFIG_LIBCURL_OPENSSL=y' \
+    'CONFIG_LIBCURL_HTTP2=y' \
+    'CONFIG_LIBCURL_ZLIB=y' \
+    '# CONFIG_LIBCURL_WOLFSSL is not set' \
+    '# CONFIG_LIBCURL_GNUTLS is not set' \
+    '# CONFIG_LIBCURL_MBEDTLS is not set' \
+    '# CONFIG_LIBCURL_NOSSL is not set' \
+    '# CONFIG_LIBCURL_ZSTD is not set' \
+    '# CONFIG_LIBCURL_THREADED_RESOLVER is not set' \
+    '# CONFIG_LIBCURL_LDAP is not set' \
+    '# CONFIG_LIBCURL_LIBIDN2 is not set' \
+    '# CONFIG_LIBCURL_SSH2 is not set' \
+    '# CONFIG_LIBCURL_HTTP3 is not set' \
+    '# CONFIG_LIBCURL_KERBEROS_AUTH is not set' \
+    '# CONFIG_OPENSSL_WITH_COMPRESSION is not set' \
+    '# CONFIG_OPENSSL_ENGINE_BUILTIN_AFALG is not set' \
+    '# CONFIG_OPENSSL_ENGINE_BUILTIN_DEVCRYPTO is not set' \
+    '# CONFIG_OPENSSL_ENGINE_BUILTIN_PADLOCK is not set' >> "$sdk_dir/.config"
 sdk_defconfig curl-openssl
 grep -q '^CONFIG_PACKAGE_cno=m$' "$sdk_dir/.config" \
     || die 'SDK defconfig dropped CONFIG_PACKAGE_cno=m while selecting curl TLS'
-grep -q '^CONFIG_LIBCURL_OPENSSL=y$' "$sdk_dir/.config" \
-    || die 'SDK defconfig did not retain the libcurl OpenSSL backend'
-grep -Eq '^CONFIG_PACKAGE_libcurl=[my]$' "$sdk_dir/.config" \
-    || die 'SDK defconfig did not select libcurl'
-grep -Eq '^CONFIG_PACKAGE_libopenssl=[my]$' "$sdk_dir/.config" \
-    || die 'SDK defconfig did not select libopenssl'
-if grep -Eq '^CONFIG_LIBCURL_(WOLFSSL|GNUTLS|MBEDTLS|NOSSL)=y$' "$sdk_dir/.config"; then
-    die 'SDK defconfig retained a conflicting libcurl TLS backend'
-fi
+for config_name in LIBCURL_OPENSSL LIBCURL_HTTP2 LIBCURL_ZLIB; do
+    grep -q "^CONFIG_${config_name}=y$" "$sdk_dir/.config" \
+        || die "SDK defconfig did not retain CONFIG_${config_name}=y"
+done
+for package_name in libcurl libopenssl libnghttp2 zlib; do
+    grep -Eq "^CONFIG_PACKAGE_${package_name}=[my]$" "$sdk_dir/.config" \
+        || die "SDK defconfig did not select $package_name"
+done
+for config_name in \
+    LIBCURL_WOLFSSL LIBCURL_GNUTLS LIBCURL_MBEDTLS LIBCURL_NOSSL \
+    LIBCURL_ZSTD LIBCURL_THREADED_RESOLVER LIBCURL_LDAP \
+    LIBCURL_LIBIDN2 LIBCURL_SSH2 LIBCURL_HTTP3 LIBCURL_KERBEROS_AUTH
+do
+    grep -q "^# CONFIG_${config_name} is not set$" "$sdk_dir/.config" \
+        || die "SDK defconfig did not keep CONFIG_${config_name} disabled"
+done
+for config_name in \
+    OPENSSL_WITH_COMPRESSION OPENSSL_ENGINE_BUILTIN_AFALG \
+    OPENSSL_ENGINE_BUILTIN_DEVCRYPTO OPENSSL_ENGINE_BUILTIN_PADLOCK
+do
+    grep -q "^# CONFIG_${config_name} is not set$" "$sdk_dir/.config" \
+        || die "SDK defconfig did not keep CONFIG_${config_name} disabled"
+done
 
 actual_arch=$(sed -n 's/^CONFIG_TARGET_ARCH_PACKAGES=//p' "$sdk_dir/.config" | tr -d '"' | head -n 1)
 [ -n "$actual_arch" ] || die 'SDK .config has no CONFIG_TARGET_ARCH_PACKAGES'
@@ -371,7 +444,7 @@ sh "$CNO_BUILDS_ROOT/scripts/verify-openwrt-elf.sh" \
 runtime_archive="$work/$output_name.runtime.tar.gz"
 tar -czf "$runtime_archive" -C "$packaged_root" .
 sh "$CNO_BUILDS_ROOT/scripts/smoke-openwrt.sh" \
-    "$runtime_archive" "$sdk_dir" "$version" "$emulator"
+    "$runtime_archive" "$sdk_dir" "$version" "$emulator_path"
 
 cat > "$output_dir/$output_name.buildinfo" <<EOF
 cno_version=$version

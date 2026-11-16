@@ -29,6 +29,7 @@ work=$(make_temp_dir "${RUNNER_TEMP:-${TMPDIR:-/tmp}}")
 trap 'rm -rf -- "$work"' EXIT HUP INT TERM
 package_dir="$work/cno"
 repo_dir="$work/repository"
+trusted_keys_dir="$work/apk-keys"
 build_user=$(id -un)
 user_home=$(awk -F: -v user="$build_user" '$1 == user { print $6; found++ } END { if (found != 1) exit 1 }' /etc/passwd) \
     || die "cannot determine the home directory for $build_user"
@@ -37,7 +38,8 @@ case $user_home in
     *) die "invalid home directory for $build_user: $user_home" ;;
 esac
 abuild_config_dir="$user_home/.abuild"
-mkdir -p "$package_dir" "$repo_dir" "$output_dir" "$abuild_config_dir"
+mkdir -p "$package_dir" "$repo_dir" "$output_dir" "$abuild_config_dir" \
+    "$trusted_keys_dir"
 source_name="cno-$version.tar.gz"
 cp "$archive" "$package_dir/$source_name"
 cp "$CNO_BUILDS_ROOT/LICENSE" "$package_dir/LICENSE"
@@ -58,11 +60,15 @@ export SOURCE_DATE_EPOCH="$source_date_epoch"
 if [ -n "${ABUILD_PRIVATE_KEY:-}" ]; then
     [ -f "$ABUILD_PRIVATE_KEY" ] || die "ABUILD_PRIVATE_KEY does not exist: $ABUILD_PRIVATE_KEY"
     private_key="$abuild_config_dir/$(basename -- "$ABUILD_PRIVATE_KEY")"
-    cp "$ABUILD_PRIVATE_KEY" "$private_key"
+    if [ "$ABUILD_PRIVATE_KEY" != "$private_key" ]; then
+        cp "$ABUILD_PRIVATE_KEY" "$private_key"
+    fi
     chmod 0600 "$private_key"
     public_key="$private_key.pub"
     if [ -f "$ABUILD_PRIVATE_KEY.pub" ]; then
-        cp "$ABUILD_PRIVATE_KEY.pub" "$public_key"
+        if [ "$ABUILD_PRIVATE_KEY.pub" != "$public_key" ]; then
+            cp "$ABUILD_PRIVATE_KEY.pub" "$public_key"
+        fi
     else
         openssl rsa -in "$ABUILD_PRIVATE_KEY" -pubout -out "$public_key"
     fi
@@ -74,10 +80,19 @@ else
     chmod 0600 "$private_key"
 fi
 printf 'PACKAGER_PRIVKEY=%s\n' "$private_key" > "$abuild_config_dir/abuild.conf"
+public_key_name=$(basename -- "$public_key")
+validate_asset_name "$public_key_name"
+cp "$public_key" "$trusted_keys_dir/$public_key_name"
+chmod 0644 "$trusted_keys_dir/$public_key_name"
 
 (
     cd "$package_dir"
-    REPODEST="$repo_dir" SRCDEST="$package_dir" abuild -F -r
+    # abuild runs `apk index` after creating the signed package. Give that
+    # command the matching public key so it verifies the package instead of
+    # rejecting its signature as untrusted. This deliberately keeps signature
+    # verification enabled for both release and per-job temporary keys.
+    ABUILD_APK_INDEX_OPTS="--keys-dir $trusted_keys_dir" \
+        REPODEST="$repo_dir" SRCDEST="$package_dir" abuild -F -r
 )
 
 set -- "$repo_dir"/*/"$alpine_arch"/"${CNO_PACKAGE_NAME}-${version}-r${CNO_PACKAGE_RELEASE}.apk"

@@ -28,6 +28,7 @@ first_diagnostic=$(
                 text ~ /cmake error|configure: error|undefined reference/ ||
                 text ~ /collect2: error|ninja:.*build stopped/ ||
                 text ~ /cannot find[[:space:]]+-l|unable to select packages/ ||
+                text ~ /error relocating|unsupported relocation type/ ||
                 text ~ /segmentation fault|illegal instruction|bus error/ ||
                 text ~ /exec format error/) {
                 print NR

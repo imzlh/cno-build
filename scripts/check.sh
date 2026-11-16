@@ -33,6 +33,16 @@ if grep -Fq 'apk add --no-cache alpine-sdk openssl coreutils' \
     "$CNO_BUILDS_ROOT/.github/workflows/packages.yml"; then
     die 'Alpine bootstrap must not discard indexes before abuild runs'
 fi
+grep -Fq 'ABUILD_APK_INDEX_OPTS="--keys-dir $trusted_keys_dir"' \
+    "$CNO_BUILDS_ROOT/scripts/build-alpine.sh" \
+    || die 'Alpine repository indexing must trust the package signing public key'
+grep -Fq 'cp "$public_key" "$trusted_keys_dir/$public_key_name"' \
+    "$CNO_BUILDS_ROOT/scripts/build-alpine.sh" \
+    || die 'Alpine index trust directory must contain the matching public key'
+if grep -Eq 'ABUILD_APK_INDEX_OPTS=.*--allow-untrusted' \
+    "$CNO_BUILDS_ROOT/scripts/build-alpine.sh"; then
+    die 'Alpine repository indexing must not disable signature verification'
+fi
 
 # Failure annotations must expose the first useful diagnostic as well as the
 # final make output. Parallel OpenWrt dependencies commonly finish after cno
@@ -52,50 +62,207 @@ make: *** [include/toplevel.mk:226: package/cno/compile] Error 2
 EOF
 failure_report=$(sh "$CNO_BUILDS_ROOT/scripts/report-build-failure.sh" \
     "$failure_log" 'fixture failed' 2>&1)
-rm -rf -- "$failure_fixture"
 printf '%s\n' "$failure_report" | grep -Fq \
     "First high-signal diagnostic (log line 5):%0Asrc/runtime.c:17:9: error: unknown type name 'fixture_type'" \
     || die 'failure reporter did not preserve the first compiler diagnostic'
 printf '%s\n' "$failure_report" | grep -Fq \
     'make: *** [include/toplevel.mk:226: package/cno/compile] Error 2' \
     || die 'failure reporter did not preserve the final build error'
+
+failure_log="$failure_fixture/qemu-loader-failure.log"
+cat > "$failure_log" <<'EOF'
+-- Could NOT find OpenSSL (missing: OPENSSL_CRYPTO_LIBRARY OPENSSL_INCLUDE_DIR)
+-- Could NOT find Libngtcp2 (missing: LIBNGTCP2_LIBRARY LIBNGTCP2_INCLUDE_DIR)
+Error relocating /sdk/staging_dir/host/lib/runas.so: unsupported relocation type 7
+make[4]: *** [build.ninja:802: cno_cli_blob.h] Error 1
+make: *** [include/toplevel.mk:226: package/cno/compile] Error 2
+EOF
+failure_report=$(sh "$CNO_BUILDS_ROOT/scripts/report-build-failure.sh" \
+    "$failure_log" 'qemu fixture failed' 2>&1)
+rm -rf -- "$failure_fixture"
+printf '%s\n' "$failure_report" | grep -Fq \
+    'First high-signal diagnostic (log line 3):%0AError relocating /sdk/staging_dir/host/lib/runas.so: unsupported relocation type 7' \
+    || die 'failure reporter did not prioritize the target-loader relocation error'
 grep -Fq 'sh scripts/report-build-failure.sh "$log"' \
     "$CNO_BUILDS_ROOT/.github/workflows/packages.yml" \
     || die 'package workflow does not use the structured failure reporter'
 grep -Fq '[openwrt-sdk] parallel build failed; retrying package/cno serially' \
     "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" \
     || die 'OpenWrt failures must be retried serially for deterministic diagnostics'
+grep -Fq 'emulator_path=$(command -v "$emulator")' \
+    "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" \
+    || die 'OpenWrt must resolve the system qemu-user executable before SDK make'
+grep -Fq 'CNO_QEMU="$emulator_path"' \
+    "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" \
+    || die 'OpenWrt target tools must use the absolute system qemu-user path'
+wrapper_unset_count=$(grep -Fc \
+    "'unset LD_PRELOAD LD_LIBRARY_PATH RUNAS_ARG0'" \
+    "$CNO_BUILDS_ROOT/packaging/openwrt/Makefile")
+[ "$wrapper_unset_count" -eq 2 ] \
+    || die 'both OpenWrt target-tool wrappers must clear host loader injection'
+grep -Fq 'exec "$(CNO_QEMU)" -L' \
+    "$CNO_BUILDS_ROOT/packaging/openwrt/Makefile" \
+    || die 'OpenWrt target-tool wrappers must quote the absolute qemu-user path'
+dynamic_symbol_read_count=$(grep -Fc \
+    '$readelf_command --use-dynamic --dyn-syms --wide' \
+    "$CNO_BUILDS_ROOT/scripts/verify-openwrt-elf.sh")
+[ "$dynamic_symbol_read_count" -eq 2 ] \
+    || die 'OpenWrt ELF export checks must read symbols through the dynamic section'
 grep -Fq './scripts/feeds update base packages' \
     "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" \
     || die 'OpenWrt must index the SDK-pinned base and packages feeds'
-grep -Fq './scripts/feeds install -p base openssl zlib ca-certificates' \
+grep -Fq './scripts/feeds install -p base zlib ca-certificates' \
     "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" \
     || die 'OpenWrt must install cno core dependency recipes from the base feed'
-grep -Fq './scripts/feeds install -p packages libcurl libsqlite3 libffi libexpat' \
+grep -Fq './scripts/feeds install -p packages libsqlite3 libffi libexpat libnghttp2' \
     "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" \
-    || die 'OpenWrt must install only cno dependency recipes from the packages feed'
+    || die 'OpenWrt must install only the active packages-feed dependency recipes'
+for direct_recipe in libcurl openssl; do
+    if awk -v wanted="$direct_recipe" '
+        /\.\/scripts\/feeds install/ {
+            for (field = 1; field <= NF; field++) if ($field == wanted) bad=1
+        }
+        END { exit bad }
+    ' "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh"; then
+        :
+    else
+        die "OpenWrt must link $direct_recipe without recursively installing disabled dependencies"
+    fi
+done
+grep -Fq 'scripts/normalize-openwrt-depends.sh' \
+    "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" \
+    || die 'OpenWrt must normalize curl and OpenSSL package dependencies'
+grep -Fq 'ln -s ../../../feeds/packages/net/curl "$curl_recipe"' \
+    "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" \
+    || die 'OpenWrt must link the SDK-pinned curl source recipe directly'
+grep -Fq 'ln -s ../../../feeds/base/package/libs/openssl "$openssl_recipe"' \
+    "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" \
+    || die 'OpenWrt must link the SDK-pinned OpenSSL source recipe directly'
+grep -Fq 'refusing to replace non-symlink curl recipe' \
+    "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" \
+    || die 'OpenWrt curl recipe linking must not replace an existing directory'
+grep -Fq 'refusing to replace non-symlink OpenSSL recipe' \
+    "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" \
+    || die 'OpenWrt OpenSSL recipe linking must not replace an existing directory'
 if grep -Fq './scripts/feeds install -a' \
     "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh"; then
     die 'OpenWrt must not expose unrelated packages-feed Kconfig entries'
 fi
 grep -Fq "grep -Fqi 'recursive dependency detected'" \
     "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" \
-    || die 'OpenWrt defconfig must reject recursive Kconfig diagnostics'
+    || die 'OpenWrt defconfig must reject every recursive Kconfig diagnostic'
 grep -Fq 'sdk_defconfig curl-openssl' \
     "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" \
     || die 'OpenWrt curl TLS selection must use checked defconfig output'
 grep -Fq "'CONFIG_LIBCURL_OPENSSL=y'" \
     "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" \
     || die 'OpenWrt libcurl must use the explicitly selected OpenSSL backend'
+grep -Fq "'CONFIG_LIBCURL_HTTP2=y'" \
+    "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" \
+    || die 'OpenWrt libcurl must explicitly retain HTTP/2 support'
+grep -Fq "'CONFIG_LIBCURL_ZLIB=y'" \
+    "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" \
+    || die 'OpenWrt libcurl must explicitly retain zlib support'
 grep -Fq "'CONFIG_PACKAGE_libopenssl=m'" \
     "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" \
     || die 'OpenWrt configuration must explicitly seed the libopenssl package'
-grep -Fq "'^CONFIG_PACKAGE_libopenssl=[my]$'" \
+grep -Fq "'CONFIG_PACKAGE_libnghttp2=m'" \
     "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" \
-    || die 'OpenWrt configuration must verify that libopenssl was selected'
+    || die 'OpenWrt configuration must explicitly seed the libnghttp2 package'
+for disabled_option in \
+    LIBCURL_WOLFSSL LIBCURL_GNUTLS LIBCURL_MBEDTLS LIBCURL_NOSSL \
+    LIBCURL_ZSTD LIBCURL_THREADED_RESOLVER LIBCURL_LDAP \
+    LIBCURL_LIBIDN2 LIBCURL_SSH2 LIBCURL_HTTP3 LIBCURL_KERBEROS_AUTH
+do
+    grep -Fq "'# CONFIG_${disabled_option} is not set'" \
+        "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" \
+        || die "OpenWrt configuration must explicitly disable $disabled_option"
+done
+for disabled_option in \
+    OPENSSL_WITH_COMPRESSION OPENSSL_ENGINE_BUILTIN_AFALG \
+    OPENSSL_ENGINE_BUILTIN_DEVCRYPTO OPENSSL_ENGINE_BUILTIN_PADLOCK
+do
+    grep -Fq "'# CONFIG_${disabled_option} is not set'" \
+        "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" \
+        || die "OpenWrt configuration must explicitly disable $disabled_option"
+done
 grep -Fq 'name: Upload OpenWrt failure log' \
     "$CNO_BUILDS_ROOT/.github/workflows/packages.yml" \
     || die 'OpenWrt failures must preserve their complete logs'
+
+curl_fixture=$(make_temp_dir)
+curl_recipe_fixture="$curl_fixture/Makefile"
+openssl_recipe_fixture="$curl_fixture/openssl.Makefile"
+cat > "$curl_recipe_fixture" <<'EOF'
+define Package/libcurl
+  DEPENDS:= +LIBCURL_WOLFSSL:libwolfssl +LIBCURL_OPENSSL:libopenssl +LIBCURL_GNUTLS:libgnutls +LIBCURL_MBEDTLS:libmbedtls
+  DEPENDS += +LIBCURL_ZLIB:zlib +LIBCURL_ZSTD:libzstd +LIBCURL_THREADED_RESOLVER:libpthread +LIBCURL_LDAP:libopenldap
+  DEPENDS += +LIBCURL_LIBIDN2:libidn2 +LIBCURL_SSH2:libssh2 +LIBCURL_HTTP2:libnghttp2 +LIBCURL_HTTP3:libnghttp3 +LIBCURL_HTTP3:libngtcp2 +ca-bundle
+  DEPENDS += +LIBCURL_KERBEROS_AUTH:krb5-libs
+endef
+EOF
+cat > "$openssl_recipe_fixture" <<'EOF'
+define Package/libopenssl
+  DEPENDS:=+OPENSSL_WITH_COMPRESSION:zlib \
+	   +OPENSSL_ENGINE_BUILTIN_AFALG:kmod-crypto-user \
+	   +OPENSSL_ENGINE_BUILTIN_DEVCRYPTO:kmod-cryptodev \
+	   +OPENSSL_ENGINE_BUILTIN_PADLOCK:kmod-crypto-hw-padlock \
+	   $(ATOMIC64_DEPENDS)
+endef
+EOF
+cp "$curl_recipe_fixture" "$curl_fixture/curl-original.Makefile"
+cp "$openssl_recipe_fixture" "$curl_fixture/openssl-original.Makefile"
+sh "$CNO_BUILDS_ROOT/scripts/normalize-openwrt-depends.sh" \
+    "$curl_recipe_fixture" "$openssl_recipe_fixture"
+for normalized_token in +libopenssl +zlib +libnghttp2 +ca-bundle; do
+    [ "$(awk -v wanted="$normalized_token" '
+        { for (field = 1; field <= NF; field++) if ($field == wanted) count++ }
+        END { print count + 0 }
+    ' "$curl_recipe_fixture")" -eq 1 ] \
+        || die "normalized curl fixture lost $normalized_token"
+done
+if rg -n '\+LIBCURL_[A-Z0-9_]+:' "$curl_recipe_fixture" >/dev/null; then
+    die 'normalized curl fixture retained a conditional package dependency'
+fi
+if rg -n '\+OPENSSL_[A-Z0-9_]+:' "$openssl_recipe_fixture" >/dev/null; then
+    die 'normalized OpenSSL fixture retained a conditional package dependency'
+fi
+
+cp "$curl_recipe_fixture" "$curl_fixture/drifted.Makefile"
+if sh "$CNO_BUILDS_ROOT/scripts/normalize-openwrt-depends.sh" \
+    "$curl_fixture/drifted.Makefile" "$openssl_recipe_fixture" >/dev/null 2>&1; then
+    die 'curl dependency normalizer accepted an already-normalized recipe'
+fi
+
+cp "$curl_fixture/curl-original.Makefile" "$curl_fixture/unknown-curl.Makefile"
+cp "$curl_fixture/openssl-original.Makefile" "$curl_fixture/unknown-openssl.Makefile"
+printf '%s\n' 'FUTURE_DEPENDS:=+LIBCURL_FUTURE_BACKEND:libfuture' \
+    >> "$curl_fixture/unknown-curl.Makefile"
+if sh "$CNO_BUILDS_ROOT/scripts/normalize-openwrt-depends.sh" \
+    "$curl_fixture/unknown-curl.Makefile" \
+    "$curl_fixture/unknown-openssl.Makefile" >/dev/null 2>&1; then
+    die 'dependency normalizer accepted an unknown curl conditional token'
+fi
+
+cp "$curl_fixture/curl-original.Makefile" "$curl_fixture/unknown-curl.Makefile"
+printf '%s\n' 'FUTURE_DEPENDS:=+OPENSSL_FUTURE_BACKEND:libfuture' \
+    >> "$curl_fixture/unknown-openssl.Makefile"
+if sh "$CNO_BUILDS_ROOT/scripts/normalize-openwrt-depends.sh" \
+    "$curl_fixture/unknown-curl.Makefile" \
+    "$curl_fixture/unknown-openssl.Makefile" >/dev/null 2>&1; then
+    die 'dependency normalizer accepted an unknown OpenSSL conditional token'
+fi
+
+cp "$curl_fixture/curl-original.Makefile" "$curl_fixture/duplicate-curl.Makefile"
+cp "$curl_fixture/openssl-original.Makefile" "$curl_fixture/duplicate-openssl.Makefile"
+printf '%s\n' 'DEPENDS += +OPENSSL_WITH_COMPRESSION:zlib' \
+    >> "$curl_fixture/duplicate-openssl.Makefile"
+if sh "$CNO_BUILDS_ROOT/scripts/normalize-openwrt-depends.sh" \
+    "$curl_fixture/duplicate-curl.Makefile" \
+    "$curl_fixture/duplicate-openssl.Makefile" >/dev/null 2>&1; then
+    die 'dependency normalizer accepted a duplicate OpenSSL conditional token'
+fi
+rm -rf -- "$curl_fixture"
 
 for table_spec in \
     "$CNO_BUILDS_ROOT/config/debian-targets.tsv:4" \

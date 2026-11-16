@@ -260,12 +260,12 @@ verify_dynamic() {
 verify_dynamic "$cno"
 verify_dynamic "$oxc"
 
-$readelf_command --dyn-syms --wide "$cno" | grep -Eq \
+$readelf_command --use-dynamic --dyn-syms --wide "$cno" | grep -Eq \
     'GLOBAL[[:space:]]+DEFAULT[[:space:]]+[0-9]+[[:space:]]+JS_[A-Za-z0-9_]+' || {
     printf 'cno does not export the QuickJS API needed by OXC\n' >&2
     exit 1
 }
-$readelf_command --dyn-syms --wide "$oxc" | grep -Eq \
+$readelf_command --use-dynamic --dyn-syms --wide "$oxc" | grep -Eq \
     'GLOBAL[[:space:]]+DEFAULT[[:space:]]+[0-9]+[[:space:]]+tjs_module_info$' || {
     printf 'OXC does not export tjs_module_info\n' >&2
     exit 1
