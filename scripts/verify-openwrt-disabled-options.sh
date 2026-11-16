@@ -16,7 +16,7 @@ shift
 
 for config_name do
     case $config_name in
-        ''|*[!A-Z0-9_]*)
+        ''|*[!A-Za-z0-9_-]*)
             printf 'error: invalid OpenWrt config option name: %s\n' \
                 "$config_name" >&2
             exit 1

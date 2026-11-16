@@ -162,6 +162,19 @@ grep -Fq "grep -Fqi 'recursive dependency detected'" \
 grep -Fq 'sdk_defconfig curl-openssl' \
     "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" \
     || die 'OpenWrt curl TLS selection must use checked defconfig output'
+initial_defconfig_line=$(grep -n '^sdk_defconfig initial$' \
+    "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" | cut -d: -f1)
+[ -n "$initial_defconfig_line" ] \
+    || die 'OpenWrt build must run an initial checked defconfig'
+for buildbot_option in ALL_NONSHARED ALL_KMODS; do
+    disabled_line=$(grep -nF "'# CONFIG_${buildbot_option} is not set'" \
+        "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" | head -n 1 | cut -d: -f1)
+    [ -n "$disabled_line" ] && [ "$disabled_line" -lt "$initial_defconfig_line" ] \
+        || die "OpenWrt must disable $buildbot_option before the initial defconfig"
+done
+grep -Fq '"$sdk_dir/.config" ALL_NONSHARED ALL_KMODS' \
+    "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" \
+    || die 'OpenWrt must verify buildbot package defaults stayed disabled'
 grep -Fq "'CONFIG_LIBCURL_OPENSSL=y'" \
     "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" \
     || die 'OpenWrt libcurl must use the explicitly selected OpenSSL backend'
@@ -194,6 +207,13 @@ do
         "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" \
         || die "OpenWrt configuration must explicitly disable $disabled_option"
 done
+for disabled_package in \
+    libopenssl-afalg libopenssl-devcrypto libopenssl-padlock
+do
+    grep -Fq "'# CONFIG_PACKAGE_${disabled_package} is not set'" \
+        "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" \
+        || die "OpenWrt configuration must explicitly disable $disabled_package"
+done
 grep -Fq 'scripts/verify-openwrt-disabled-options.sh' \
     "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" \
     || die 'OpenWrt must verify that optional config symbols are disabled or absent'
@@ -204,11 +224,14 @@ cat > "$disabled_config_fixture/.config" <<'EOF'
 CONFIG_UNRELATED=y
 EOF
 sh "$CNO_BUILDS_ROOT/scripts/verify-openwrt-disabled-options.sh" \
-    "$disabled_config_fixture/.config" DEFINED_DISABLED ABSENT_DISABLED
+    "$disabled_config_fixture/.config" DEFINED_DISABLED ABSENT_DISABLED \
+    PACKAGE_absent-lowercase
 printf '%s\n' 'CONFIG_FORBIDDEN=y' >> "$disabled_config_fixture/.config"
+printf '%s\n' 'CONFIG_PACKAGE_forbidden-engine=m' \
+    >> "$disabled_config_fixture/.config"
 if sh "$CNO_BUILDS_ROOT/scripts/verify-openwrt-disabled-options.sh" \
     "$disabled_config_fixture/.config" DEFINED_DISABLED ABSENT_DISABLED \
-    FORBIDDEN >/dev/null 2>&1; then
+    FORBIDDEN PACKAGE_forbidden-engine >/dev/null 2>&1; then
     die 'OpenWrt disabled-option verifier accepted an assigned forbidden option'
 fi
 rm -rf -- "$disabled_config_fixture"

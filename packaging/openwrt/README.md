@@ -78,10 +78,20 @@ tokens and unknown conditional tokens are fatal. Zlib remains staged through
 curl's unconditional dependency. Any unsafe upstream dependency-shape drift
 aborts before `defconfig`.
 
+Before the first `defconfig`, the builder disables the SDK buildbot defaults
+`CONFIG_ALL_NONSHARED` and `CONFIG_ALL_KMODS`. Otherwise that first pass expands
+nearly every non-shared package and kernel module to `m`, pulling unrelated
+hardware engines into the build even though cno does not use them. The builder
+then selects only cno and its active dependency closure explicitly.
+
 After `defconfig`, enabled curl features and their packages must still be
 selected. Disabled optional features may appear as `# CONFIG_* is not set` or
 may be absent when that OpenWrt release does not define the symbol; any
 `CONFIG_*=...` assignment for one of those disabled features is fatal.
+OpenSSL engine ABI support remains enabled, but the AFALG, `/dev/crypto`, and
+Padlock hardware-engine packages are explicitly disabled. This overrides
+SDK package defaults without removing the engine ABI used by official OpenWrt
+libraries.
 
 The Rust archive is only one half of OXC.  `Makefile` compiles and links the C
 binding with that SDK's `TARGET_CC`, `TARGET_CFLAGS`, and `TARGET_LDFLAGS`, so
