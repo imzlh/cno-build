@@ -36,6 +36,7 @@ esac
 
 readelf_command=${READELF:-readelf}
 command -v "$readelf_command" >/dev/null 2>&1 || { printf 'readelf not found\n' >&2; exit 1; }
+command -v nm >/dev/null 2>&1 || { printf 'nm not found\n' >&2; exit 1; }
 
 actual_arch=$(sed -n 's/^CONFIG_TARGET_ARCH_PACKAGES=//p' "$sdk/.config" \
     | tr -d '"' | head -n 1)
@@ -260,13 +261,13 @@ verify_dynamic() {
 verify_dynamic "$cno"
 verify_dynamic "$oxc"
 
-$readelf_command --use-dynamic --dyn-syms --wide "$cno" | grep -Eq \
-    'GLOBAL[[:space:]]+DEFAULT[[:space:]]+[0-9]+[[:space:]]+JS_[A-Za-z0-9_]+' || {
+nm -D --defined-only "$cno" | grep -Eq \
+    '[[:space:]][TDBR][[:space:]]+JS_[A-Za-z0-9_]+$' || {
     printf 'cno does not export the QuickJS API needed by OXC\n' >&2
     exit 1
 }
-$readelf_command --use-dynamic --dyn-syms --wide "$oxc" | grep -Eq \
-    'GLOBAL[[:space:]]+DEFAULT[[:space:]]+[0-9]+[[:space:]]+tjs_module_info$' || {
+nm -D --defined-only "$oxc" | grep -Eq \
+    '[[:space:]][TDBR][[:space:]]+tjs_module_info$' || {
     printf 'OXC does not export tjs_module_info\n' >&2
     exit 1
 }

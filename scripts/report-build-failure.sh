@@ -24,13 +24,17 @@ first_diagnostic=$(
     awk '
         {
             text = tolower($0)
+            # The OpenWrt downloader logs curl failures while cycling mirrors;
+            # a later mirror can and commonly does succeed.
+            if (text ~ /^curl: \([0-9]+\).*error:/) next
             if (text ~ /fatal error:|(^|[[:space:]])error:|failed:/ ||
                 text ~ /cmake error|configure: error|undefined reference/ ||
                 text ~ /collect2: error|ninja:.*build stopped/ ||
                 text ~ /cannot find[[:space:]]+-l|unable to select packages/ ||
                 text ~ /error relocating|unsupported relocation type/ ||
                 text ~ /segmentation fault|illegal instruction|bus error/ ||
-                text ~ /exec format error/) {
+                text ~ /exec format error|staged package is missing/ ||
+                text ~ /does not export the quickjs api/) {
                 print NR
                 exit
             }

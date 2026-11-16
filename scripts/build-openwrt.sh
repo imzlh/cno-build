@@ -391,16 +391,10 @@ package=$(find "$sdk_dir/bin/packages" -type f \( -name "cno[-_]*.$format" -o -n
 [ -n "$package" ] || die "the SDK did not produce a cno .$format package"
 [ "$(printf '%s\n' "$package" | wc -l)" -eq 1 ] \
     || die "the SDK produced more than one cno .$format package"
-staged_root=$(find "$sdk_dir/build_dir" -type d -path '*/ipkg-*/cno' -print | sort | head -n 1)
-if [ -z "$staged_root" ]; then
-    staged_root=$(find "$sdk_dir/build_dir" -type d -path '*/.pkgdir/cno' -print | sort | head -n 1)
-fi
-if [ -z "$staged_root" ]; then
-    staged_root=$(find "$sdk_dir/build_dir" -type d -path '*/.pkgdir/cno.installed' -print \
-        | sort | head -n 1)
-fi
-[ -n "$staged_root" ] || die 'cannot find the OpenWrt-staged cno root'
-runtime="$staged_root/usr/lib/cno/cno"
+runtime=$(find "$sdk_dir/build_dir" -type f -path '*/cno/usr/lib/cno/cno' -print \
+    | sort | head -n 1)
+[ -n "$runtime" ] || die 'cannot find the OpenWrt-staged cno runtime'
+staged_root=${runtime%/usr/lib/cno/cno}
 oxc="$staged_root/usr/lib/cno/ext/oxc.so"
 assert_staged_payload() {
     root=$1
@@ -449,17 +443,13 @@ case $format in
         host_apk=$(find "$sdk_dir/staging_dir/host" "$sdk_dir/staging_dir/hostpkg" \
             \( -type f -o -type l \) -path '*/bin/apk' -print 2>/dev/null | head -n 1)
         [ -n "$host_apk" ] && [ -x "$host_apk" ] \
-            || die 'cannot find the SDK host apk tool for ADB package installation'
+            || die 'cannot find the SDK host apk tool for ADB package extraction'
         # OpenWrt snapshot packages use apk-tools v3's ADB format, so they
-        # cannot be unpacked as Alpine-style gzip tarballs.  Install the local
-        # package into an empty database instead.  An explicit architecture is
-        # essential here: the host apk executable itself is x86_64, while the
-        # package may be AArch64, ARM, MIPS, or RISC-V.  Dependencies remain
-        # deliberately unresolved in this temporary root; the QEMU smoke test
-        # below supplies their target DSOs from the SDK staging sysroot.
-        "$host_apk" add --root "$packaged_root" --arch "$expected_arch" \
-            --usermode --initdb --allow-untrusted --no-network --no-scripts \
-            --force-broken-world "$package_abs"
+        # cannot be unpacked as Alpine-style gzip tarballs. Extracting directly
+        # also avoids asking the solver to resolve target dependencies in this
+        # deliberately empty root. The QEMU smoke test below supplies their
+        # target DSOs from the SDK staging sysroot.
+        "$host_apk" extract --destination "$packaged_root" --no-chown "$package_abs"
         ;;
 esac
 assert_staged_payload "$packaged_root"

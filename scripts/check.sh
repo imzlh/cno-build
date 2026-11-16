@@ -79,10 +79,23 @@ make: *** [include/toplevel.mk:226: package/cno/compile] Error 2
 EOF
 failure_report=$(sh "$CNO_BUILDS_ROOT/scripts/report-build-failure.sh" \
     "$failure_log" 'qemu fixture failed' 2>&1)
-rm -rf -- "$failure_fixture"
 printf '%s\n' "$failure_report" | grep -Fq \
     'First high-signal diagnostic (log line 3):%0AError relocating /sdk/staging_dir/host/lib/runas.so: unsupported relocation type 7' \
     || die 'failure reporter did not prioritize the target-loader relocation error'
+failure_log="$failure_fixture/openwrt-download-fallback.log"
+cat > "$failure_log" <<'EOF'
+curl: (22) The requested URL returned error: 404
+Download failed.
++ curl https://next-mirror.invalid/source.tar.xz
+download succeeded
+error: staged package is missing the cno runtime
+EOF
+failure_report=$(sh "$CNO_BUILDS_ROOT/scripts/report-build-failure.sh" \
+    "$failure_log" 'download fallback fixture failed' 2>&1)
+printf '%s\n' "$failure_report" | grep -Fq \
+    'First high-signal diagnostic (log line 5):%0Aerror: staged package is missing the cno runtime' \
+    || die 'failure reporter treated a recovered mirror error as fatal'
+rm -rf -- "$failure_fixture"
 grep -Fq 'sh scripts/report-build-failure.sh "$log"' \
     "$CNO_BUILDS_ROOT/.github/workflows/packages.yml" \
     || die 'package workflow does not use the structured failure reporter'
@@ -104,10 +117,16 @@ grep -Fq 'exec "$(CNO_QEMU)" -L' \
     "$CNO_BUILDS_ROOT/packaging/openwrt/Makefile" \
     || die 'OpenWrt target-tool wrappers must quote the absolute qemu-user path'
 dynamic_symbol_read_count=$(grep -Fc \
-    '$readelf_command --use-dynamic --dyn-syms --wide' \
+    'nm -D --defined-only' \
     "$CNO_BUILDS_ROOT/scripts/verify-openwrt-elf.sh")
 [ "$dynamic_symbol_read_count" -eq 2 ] \
     || die 'OpenWrt ELF export checks must read symbols through the dynamic section'
+grep -Fq '"$host_apk" extract --destination "$packaged_root"' \
+    "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" \
+    || die 'OpenWrt APK validation must extract ADB payloads without dependency solving'
+grep -Fq -- "-path '*/cno/usr/lib/cno/cno'" \
+    "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" \
+    || die 'OpenWrt staged root detection must locate the runtime, not a cno-named directory'
 grep -Fq './scripts/feeds update base packages' \
     "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" \
     || die 'OpenWrt must index the SDK-pinned base and packages feeds'
