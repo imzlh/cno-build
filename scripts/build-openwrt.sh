@@ -425,7 +425,8 @@ assert_staged_payload "$staged_root"
 
 sh "$CNO_BUILDS_ROOT/scripts/verify-openwrt-elf.sh" \
     "$sdk_dir" "$expected_arch" "$endian" "$machine_regex" "$float_abi" \
-    "$rust_target" "$rust_features" "$runtime" "$oxc"
+    "$rust_target" "$rust_features" "$runtime" "$oxc" \
+    "$arm_fpu_d16" staged
 
 mkdir -p "$output_dir"
 output_name="${CNO_PACKAGE_NAME}-${version}-r${CNO_PACKAGE_RELEASE}-openwrt-${release}-${expected_arch}-${target}-${subtarget}.${format}"
@@ -463,22 +464,31 @@ case $format in
         [ -n "$host_apk" ] && [ -x "$host_apk" ] \
             || die 'cannot find the SDK host apk tool for ADB package extraction'
         # Snapshot SDKs sign their packages with a build key generated in the
-        # SDK root, which no installed keyring trusts. Keep signature
-        # verification on by trusting the SDK's own public build key, and fall
-        # back to the documented untrusted install only when that file is
-        # absent. OpenWrt snapshot packages use apk-tools v3's ADB format, so
-        # they cannot be unpacked as Alpine-style gzip tarballs. Extracting
-        # directly also avoids asking the solver to resolve target
-        # dependencies in this deliberately empty root. The QEMU smoke test
-        # below supplies their target DSOs from the SDK staging sysroot.
+        # SDK root (key-build.pub on the classic layout, public-key.pem for
+        # apk-tools v3 SDKs), which no installed keyring trusts. Keep
+        # signature verification on by trusting the SDK's own public build
+        # key, and fall back to the documented untrusted install only when
+        # no public key file exists. OpenWrt snapshot packages use apk-tools
+        # v3's ADB format, so they cannot be unpacked as Alpine-style gzip
+        # tarballs. Extracting directly also avoids asking the solver to
+        # resolve target dependencies in this deliberately empty root. The
+        # QEMU smoke test below supplies their target DSOs from the SDK
+        # staging sysroot.
         keys_dir="$work/apk-keys"
         mkdir -p "$keys_dir"
         untrusted=
-        if [ -f "$sdk_dir/key-build.pub" ]; then
-            cp "$sdk_dir/key-build.pub" "$keys_dir/key-build.pub"
+        sdk_pub_key=
+        for candidate in key-build.pub public-key.pem; do
+            if [ -f "$sdk_dir/$candidate" ]; then
+                sdk_pub_key=$candidate
+                break
+            fi
+        done
+        if [ -n "$sdk_pub_key" ]; then
+            cp "$sdk_dir/$sdk_pub_key" "$keys_dir/$sdk_pub_key"
         else
             untrusted=--allow-untrusted
-            printf '%s\n' '[openwrt-apk] SDK has no key-build.pub; extracting untrusted' >&2
+            printf '%s\n' '[openwrt-apk] SDK ships no public build key; extracting untrusted' >&2
         fi
         # shellcheck disable=SC2086
         "$host_apk" --keys-dir "$keys_dir" $untrusted \
@@ -489,7 +499,8 @@ assert_staged_payload "$packaged_root"
 sh "$CNO_BUILDS_ROOT/scripts/verify-openwrt-elf.sh" \
     "$sdk_dir" "$expected_arch" "$endian" "$machine_regex" "$float_abi" \
     "$rust_target" "$rust_features" \
-    "$packaged_root/usr/lib/cno/cno" "$packaged_root/usr/lib/cno/ext/oxc.so"
+    "$packaged_root/usr/lib/cno/cno" "$packaged_root/usr/lib/cno/ext/oxc.so" \
+    "$arm_fpu_d16" packaged
 runtime_archive="$work/$output_name.runtime.tar.gz"
 tar -czf "$runtime_archive" -C "$packaged_root" .
 sh "$CNO_BUILDS_ROOT/scripts/smoke-openwrt.sh" \

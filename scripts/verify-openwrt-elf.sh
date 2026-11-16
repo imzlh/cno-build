@@ -3,13 +3,15 @@ set -eu
 
 usage() {
     printf '%s\n' \
-        'Usage: verify-openwrt-elf.sh SDK EXPECTED_ARCH_PACKAGES ENDIAN MACHINE_REGEX FLOAT_ABI RUST_TARGET RUST_FEATURES CNO OXC' \
+        'Usage: verify-openwrt-elf.sh SDK EXPECTED_ARCH_PACKAGES ENDIAN MACHINE_REGEX FLOAT_ABI RUST_TARGET RUST_FEATURES CNO OXC [CRT_FP_ARCH_WIDENING] [MODE]' \
         '  ENDIAN: little|big; FLOAT_ABI: hard|soft|none' \
-        '  RUST_FEATURES: default|aarch64-no-crypto|arm-soft-nofp|arm-hard-d16|arm-hard-neon' >&2
+        '  RUST_FEATURES: default|aarch64-no-crypto|arm-soft-nofp|arm-hard-d16|arm-hard-neon' \
+        '  CRT_FP_ARCH_WIDENING: empty or VFPv4 (SDK toolchain CRT default FPU tag)' \
+        '  MODE: staged (default) | packaged (sstripped payload)' >&2
     exit 2
 }
 
-[ "$#" -eq 9 ] || usage
+[ "$#" -ge 9 ] && [ "$#" -le 11 ] || usage
 sdk=$1
 expected_arch=$2
 endian=$3
@@ -19,8 +21,12 @@ rust_target=$6
 rust_features=$7
 cno=$8
 oxc=$9
+crt_fp_arch_widening=${10:-}
+mode=${11:-staged}
 case $endian in little|big) ;; *) usage ;; esac
 case $float_abi in hard|soft|none) ;; *) usage ;; esac
+case $crt_fp_arch_widening in ''|VFPv4) ;; *) usage ;; esac
+case $mode in staged|packaged) ;; *) usage ;; esac
 case $rust_features in
     default|aarch64-no-crypto|arm-soft-nofp|arm-hard-d16|arm-hard-neon) ;;
     *) usage ;;
@@ -84,16 +90,35 @@ verify_float() {
     identity=$1
     file=$2
     case $float_abi in
+        none) return 0 ;;
+        hard|soft) ;;
+        *) return 1 ;;
+    esac
+    if [ "$mode" = packaged ]; then
+        # The SDK packages payloads with sstrip, which removes the section
+        # headers and every non-alloc section: .ARM.attributes and
+        # .MIPS.abiflags no longer exist here. The staged payload has already
+        # proven the ABI from those sections; only the ELF header flags remain.
+        if printf '%s\n' "$identity" | grep -q '^Machine: ARM$'; then
+            if printf '%s\n' "$identity" | grep -Eq "Flags: .*${float_abi}-float ABI"; then
+                return 0
+            fi
+            printf 'ELF flags do not prove %s-float ABI for %s\n%s\n' \
+                "$float_abi" "$file" "$identity" >&2
+            exit 1
+        fi
+        return 0
+    fi
+    attributes=$($readelf_command -AW "$file")
+    case $float_abi in
         hard)
             if printf '%s\n' "$identity" | grep -q '^Machine: ARM$'; then
-                attributes=$($readelf_command -AW "$file")
                 if printf '%s\n' "$attributes" | grep -q 'Tag_ABI_VFP_args: VFP registers'; then
                     :
                 else
                     printf '%s\n' "$identity" | grep -Eiq 'hard.float|hard float'
                 fi
             elif printf '%s\n' "$identity" | grep -q '^Machine: MIPS'; then
-                attributes=$($readelf_command -AW "$file")
                 printf '%s\n' "$attributes" | grep -Eiq \
                     '(FP ABI|Tag_GNU_MIPS_ABI_FP):.*hard float'
             else
@@ -102,7 +127,6 @@ verify_float() {
             ;;
         soft)
             if printf '%s\n' "$identity" | grep -q '^Machine: ARM$'; then
-                attributes=$($readelf_command -AW "$file")
                 if printf '%s\n' "$attributes" | grep -q 'Tag_ABI_VFP_args: VFP registers'; then
                     false
                 elif printf '%s\n' "$identity" | grep -Eiq 'hard.float|hard float'; then
@@ -111,14 +135,12 @@ verify_float() {
                     printf '%s\n' "$attributes" | grep -Eq 'Tag_CPU_(arch|name)'
                 fi
             elif printf '%s\n' "$identity" | grep -q '^Machine: MIPS'; then
-                attributes=$($readelf_command -AW "$file")
                 printf '%s\n' "$attributes" | grep -Eiq \
                     '(FP ABI|Tag_GNU_MIPS_ABI_FP):.*soft float'
             else
                 printf '%s\n' "$identity" | grep -Eiq 'soft.float|soft float'
             fi
             ;;
-        none) return 0 ;;
     esac || {
         printf 'ELF flags do not prove %s-float ABI for %s\n%s\n' \
             "$float_abi" "$file" "$identity" >&2
@@ -130,6 +152,11 @@ verify_float "$oxc_identity" "$oxc"
 
 verify_arm_features() {
     file=$1
+    if [ "$mode" = packaged ]; then
+        # sstrip removed .ARM.attributes from the packaged payload; the staged
+        # payload already proved the feature profile.
+        return 0
+    fi
     attributes=$($readelf_command -AW "$file")
     case $rust_features in
         default) return 0 ;;
@@ -143,12 +170,23 @@ verify_arm_features() {
             fi
             ;;
         arm-hard-d16)
-            printf '%s\n' "$attributes" | grep -Eq \
-                'Tag_FP_arch: (VFPv3-D16|VFPv4-D16)' || {
-                    printf 'ARM D16 profile is not limited to a D16 FPU: %s\n%s\n' \
-                        "$file" "$attributes" >&2
-                    exit 1
-                }
+            if printf '%s\n' "$attributes" | grep -Eq \
+                'Tag_FP_arch: (VFPv3-D16|VFPv4-D16)'; then
+                :
+            elif [ "$crt_fp_arch_widening" = VFPv4 ] \
+                && printf '%s\n' "$attributes" | grep -Eq 'Tag_FP_arch: VFPv4'; then
+                # The SDK toolchain's prebuilt CRT objects (crt1.o and friends)
+                # are compiled with its default D32-capable vfpv4 selection, and
+                # ld merges Tag_FP_arch as the capability superset. Every input
+                # this repository controls carries the D16 FPU override, so the
+                # merged tag reads VFPv4 instead of VFPv4-D16. Accept it only
+                # for rows whose SDK toolchain is known to default to a D32 FPU.
+                :
+            else
+                printf 'ARM D16 profile is not limited to a D16 FPU: %s\n%s\n' \
+                    "$file" "$attributes" >&2
+                exit 1
+            fi
             if printf '%s\n' "$attributes" | grep -q 'Tag_Advanced_SIMD_arch:'; then
                 printf 'ARM D16 profile unexpectedly enables NEON: %s\n%s\n' \
                     "$file" "$attributes" >&2
@@ -184,14 +222,16 @@ if printf '%s\n' "$cno_identity" | grep -q '^Machine: MIPS'; then
             exit 1
         }
     done
-    for file in "$cno" "$oxc"; do
-        attributes=$($readelf_command -AW "$file")
-        printf '%s\n' "$attributes" | grep -Eq 'ISA:[[:space:]]+MIPS32r2' || {
-            printf 'MIPS ELF does not prove the required MIPS32r2 ISA: %s\n%s\n' \
-                "$file" "$attributes" >&2
-            exit 1
-        }
-    done
+    if [ "$mode" = staged ]; then
+        for file in "$cno" "$oxc"; do
+            attributes=$($readelf_command -AW "$file")
+            printf '%s\n' "$attributes" | grep -Eq 'ISA:[[:space:]]+MIPS32r2' || {
+                printf 'MIPS ELF does not prove the required MIPS32r2 ISA: %s\n%s\n' \
+                    "$file" "$attributes" >&2
+                exit 1
+            }
+        done
+    fi
 fi
 
 # The sifiveu row is RV64GC/lp64d.  RISC-V records both the compressed ISA and
