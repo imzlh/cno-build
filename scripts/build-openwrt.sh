@@ -187,6 +187,30 @@ sdk_make defconfig
 grep -q '^CONFIG_PACKAGE_cno=m$' "$sdk_dir/.config" \
     || die 'SDK defconfig did not retain CONFIG_PACKAGE_cno=m'
 
+# cno uses OpenSSL directly. Select the same backend for libcurl explicitly so
+# SDKs cannot retain HTTPS while leaving every TLS implementation disabled.
+# First selecting cno makes the libcurl Kconfig choice visible; now remove all
+# old sides of that choice before selecting OpenSSL and normalizing once more.
+for config_name in \
+    LIBCURL_WOLFSSL LIBCURL_GNUTLS LIBCURL_OPENSSL \
+    LIBCURL_MBEDTLS LIBCURL_NOSSL
+do
+    sed -i \
+        "/^CONFIG_${config_name}=/d;/^# CONFIG_${config_name} is not set$/d" \
+        "$sdk_dir/.config"
+done
+printf '%s\n' 'CONFIG_LIBCURL_OPENSSL=y' >> "$sdk_dir/.config"
+sdk_make defconfig
+grep -q '^CONFIG_LIBCURL_OPENSSL=y$' "$sdk_dir/.config" \
+    || die 'SDK defconfig did not retain the libcurl OpenSSL backend'
+grep -Eq '^CONFIG_PACKAGE_libcurl=[my]$' "$sdk_dir/.config" \
+    || die 'SDK defconfig did not select libcurl'
+grep -Eq '^CONFIG_PACKAGE_libopenssl=[my]$' "$sdk_dir/.config" \
+    || die 'SDK defconfig did not select libopenssl'
+if grep -Eq '^CONFIG_LIBCURL_(WOLFSSL|GNUTLS|MBEDTLS|NOSSL)=y$' "$sdk_dir/.config"; then
+    die 'SDK defconfig retained a conflicting libcurl TLS backend'
+fi
+
 actual_arch=$(sed -n 's/^CONFIG_TARGET_ARCH_PACKAGES=//p' "$sdk_dir/.config" | tr -d '"' | head -n 1)
 [ -n "$actual_arch" ] || die 'SDK .config has no CONFIG_TARGET_ARCH_PACKAGES'
 [ "$actual_arch" = "$expected_arch" ] \

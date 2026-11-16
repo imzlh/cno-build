@@ -41,6 +41,11 @@ stage development files, then adds ABI suffixes to final runtime dependencies
 itself.  The intended linkage is dynamic against OpenWrt's target libraries;
 no private `$ORIGIN/lib` bundle is made.
 
+The SDK configuration must also select `CONFIG_LIBCURL_OPENSSL=y`. Merely
+selecting both the `libcurl` and `libopenssl` packages does not choose curl's
+TLS backend in every SDK release; snapshots reject an HTTPS-enabled curl build
+when all TLS backends are disabled.
+
 The Rust archive is only one half of OXC.  `Makefile` compiles and links the C
 binding with that SDK's `TARGET_CC`, `TARGET_CFLAGS`, and `TARGET_LDFLAGS`, so
 the module receives the same endianness, float ABI, and platform flags as cno.

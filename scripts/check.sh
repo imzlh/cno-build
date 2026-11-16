@@ -65,6 +65,12 @@ grep -Fq 'sh scripts/report-build-failure.sh "$log"' \
 grep -Fq '[openwrt-sdk] parallel build failed; retrying package/cno serially' \
     "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" \
     || die 'OpenWrt failures must be retried serially for deterministic diagnostics'
+grep -Fq "'CONFIG_LIBCURL_OPENSSL=y'" \
+    "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" \
+    || die 'OpenWrt libcurl must use the explicitly selected OpenSSL backend'
+grep -Fq "'^CONFIG_PACKAGE_libopenssl=[my]$'" \
+    "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" \
+    || die 'OpenWrt configuration must verify that libopenssl was selected'
 grep -Fq 'name: Upload OpenWrt failure log' \
     "$CNO_BUILDS_ROOT/.github/workflows/packages.yml" \
     || die 'OpenWrt failures must preserve their complete logs'
