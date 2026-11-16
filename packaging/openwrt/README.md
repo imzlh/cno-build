@@ -63,17 +63,20 @@ unknown layout.
 
 Before linking curl, its SDK-local recipe is normalized fail-closed. The active
 OpenSSL, zlib, and HTTP/2 dependencies become unconditional package edges, and
-all disabled conditional package edges are removed. Every audited source token
-must occur exactly once, all conditional dependency tokens must be absent
-afterward, and the four resulting dependencies (`libopenssl`, `zlib`,
-`libnghttp2`, and `ca-bundle`) must each occur exactly once. This prevents
+all disabled conditional package edges are removed. Active source tokens and
+`ca-bundle` must occur exactly once; known disabled tokens may be absent in a
+release but may not be duplicated, and unknown conditional tokens are fatal.
+All conditional dependency tokens must be absent afterward, and the four
+resulting dependencies (`libopenssl`, `zlib`, `libnghttp2`, and `ca-bundle`)
+must each occur exactly once. This prevents
 OpenWrt package metadata from generating `PACKAGE_libcurl` / `LIBCURL_*`
 structural Kconfig cycles. Any recursive-dependency diagnostic remains fatal.
 The SDK-local OpenSSL recipe is normalized by the same helper: its compression,
-AFALG, devcrypto, and Padlock conditional dependency tokens must each occur
-exactly once and are removed because all four features are explicitly disabled.
-Zlib remains staged through curl's unconditional dependency. Any upstream token
-count or dependency-shape drift aborts before `defconfig`.
+AFALG, devcrypto, and Padlock conditional dependency tokens are removed when
+present because all four features are explicitly disabled. Duplicate known
+tokens and unknown conditional tokens are fatal. Zlib remains staged through
+curl's unconditional dependency. Any unsafe upstream dependency-shape drift
+aborts before `defconfig`.
 
 The Rust archive is only one half of OXC.  `Makefile` compiles and links the C
 binding with that SDK's `TARGET_CC`, `TARGET_CFLAGS`, and `TARGET_LDFLAGS`, so

@@ -236,6 +236,18 @@ if rg -n '\+OPENSSL_[A-Z0-9_]+:' "$openssl_recipe_fixture" >/dev/null; then
     die 'normalized OpenSSL fixture retained a conditional package dependency'
 fi
 
+cp "$curl_fixture/curl-original.Makefile" "$curl_fixture/omitted-curl.Makefile"
+cp "$curl_fixture/openssl-original.Makefile" "$curl_fixture/omitted-openssl.Makefile"
+sed -i \
+    -e 's|+LIBCURL_KERBEROS_AUTH:krb5-libs||' \
+    "$curl_fixture/omitted-curl.Makefile"
+sed -i \
+    -e 's|+OPENSSL_ENGINE_BUILTIN_PADLOCK:kmod-crypto-hw-padlock||' \
+    "$curl_fixture/omitted-openssl.Makefile"
+sh "$CNO_BUILDS_ROOT/scripts/normalize-openwrt-depends.sh" \
+    "$curl_fixture/omitted-curl.Makefile" \
+    "$curl_fixture/omitted-openssl.Makefile"
+
 cp "$curl_recipe_fixture" "$curl_fixture/drifted.Makefile"
 if sh "$CNO_BUILDS_ROOT/scripts/normalize-openwrt-depends.sh" \
     "$curl_fixture/drifted.Makefile" "$openssl_recipe_fixture" >/dev/null 2>&1; then
@@ -263,6 +275,15 @@ fi
 
 cp "$curl_fixture/curl-original.Makefile" "$curl_fixture/duplicate-curl.Makefile"
 cp "$curl_fixture/openssl-original.Makefile" "$curl_fixture/duplicate-openssl.Makefile"
+printf '%s\n' 'DEPENDS += +LIBCURL_KERBEROS_AUTH:krb5-libs' \
+    >> "$curl_fixture/duplicate-curl.Makefile"
+if sh "$CNO_BUILDS_ROOT/scripts/normalize-openwrt-depends.sh" \
+    "$curl_fixture/duplicate-curl.Makefile" \
+    "$curl_fixture/duplicate-openssl.Makefile" >/dev/null 2>&1; then
+    die 'dependency normalizer accepted a duplicate disabled curl token'
+fi
+
+cp "$curl_fixture/curl-original.Makefile" "$curl_fixture/duplicate-curl.Makefile"
 printf '%s\n' 'DEPENDS += +OPENSSL_WITH_COMPRESSION:zlib' \
     >> "$curl_fixture/duplicate-openssl.Makefile"
 if sh "$CNO_BUILDS_ROOT/scripts/normalize-openwrt-depends.sh" \

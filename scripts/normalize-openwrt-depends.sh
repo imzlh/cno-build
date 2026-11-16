@@ -51,30 +51,43 @@ reject_conditional_tokens() {
     ' "$recipe"
 }
 
-# These are the complete conditional package dependencies in the audited
-# openwrt-24.10 and snapshots curl recipes. Refuse to edit a recipe whose
-# dependency graph has drifted instead of silently producing incomplete SDK
-# metadata.
+# These active dependencies must exist exactly once because cno enables their
+# corresponding features. ca-bundle is unconditional but is audited here with
+# the same strict cardinality.
+for token in \
+    +LIBCURL_OPENSSL:libopenssl \
+    +LIBCURL_ZLIB:zlib \
+    +LIBCURL_HTTP2:libnghttp2 \
+    +ca-bundle
+do
+    count=$(count_token "$curl_makefile" "$token")
+    [ "$count" -eq 1 ] || {
+        printf 'error: required curl recipe token %s occurs %s times, expected 1\n' \
+            "$token" "$count" >&2
+        exit 1
+    }
+done
+
+# These are the complete disabled conditional package dependencies across the
+# audited openwrt-24.10 and snapshots curl recipes. Releases may omit a feature
+# entirely, which is safe, but a duplicate is ambiguous. Unknown conditional
+# tokens survive the substitutions and are rejected below.
 for token in \
     +LIBCURL_WOLFSSL:libwolfssl \
-    +LIBCURL_OPENSSL:libopenssl \
     +LIBCURL_GNUTLS:libgnutls \
     +LIBCURL_MBEDTLS:libmbedtls \
-    +LIBCURL_ZLIB:zlib \
     +LIBCURL_ZSTD:libzstd \
     +LIBCURL_THREADED_RESOLVER:libpthread \
     +LIBCURL_LDAP:libopenldap \
     +LIBCURL_LIBIDN2:libidn2 \
     +LIBCURL_SSH2:libssh2 \
-    +LIBCURL_HTTP2:libnghttp2 \
     +LIBCURL_HTTP3:libnghttp3 \
     +LIBCURL_HTTP3:libngtcp2 \
-    +LIBCURL_KERBEROS_AUTH:krb5-libs \
-    +ca-bundle
+    +LIBCURL_KERBEROS_AUTH:krb5-libs
 do
     count=$(count_token "$curl_makefile" "$token")
-    [ "$count" -eq 1 ] || {
-        printf 'error: curl recipe token %s occurs %s times, expected 1\n' \
+    [ "$count" -le 1 ] || {
+        printf 'error: disabled curl recipe token %s occurs %s times, expected at most 1\n' \
             "$token" "$count" >&2
         exit 1
     }
@@ -115,6 +128,8 @@ reject_conditional_tokens "$curl_makefile" curl LIBCURL
 # libopenssl has the same conditional-metadata problem. All four features are
 # deliberately disabled below, and curl already keeps zlib in the build
 # closure unconditionally, so remove these edges rather than promoting them.
+# A release may omit a disabled feature; duplicates and unknown conditional
+# package edges remain fatal.
 for token in \
     +OPENSSL_WITH_COMPRESSION:zlib \
     +OPENSSL_ENGINE_BUILTIN_AFALG:kmod-crypto-user \
@@ -122,8 +137,8 @@ for token in \
     +OPENSSL_ENGINE_BUILTIN_PADLOCK:kmod-crypto-hw-padlock
 do
     count=$(count_token "$openssl_makefile" "$token")
-    [ "$count" -eq 1 ] || {
-        printf 'error: OpenSSL recipe token %s occurs %s times, expected 1\n' \
+    [ "$count" -le 1 ] || {
+        printf 'error: disabled OpenSSL recipe token %s occurs %s times, expected at most 1\n' \
             "$token" "$count" >&2
         exit 1
     }
