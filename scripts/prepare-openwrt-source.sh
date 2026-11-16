@@ -144,9 +144,9 @@ printf '%s\n' "$polyfill_commit" | grep -Eq '^[0-9a-fA-F]{40}$' || {
 }
 (
     cd "$payload"
-    pnpm install --frozen-lockfile --allow-build=esbuild
-    pnpm --dir cno install --frozen-lockfile --allow-build=esbuild
-    pnpm --dir cts install --frozen-lockfile --allow-build=esbuild
+    pnpm install --frozen-lockfile
+    pnpm --dir cno install --frozen-lockfile
+    pnpm --dir cts install --frozen-lockfile
     CNO_POLYFILL_REVISION="$polyfill_commit" \
         CNO_BUNDLE_OUTFILE="$work/cno-cli.min.js" pnpm run bundle:js:min
 )

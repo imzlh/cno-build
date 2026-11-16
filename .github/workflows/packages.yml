@@ -161,7 +161,7 @@ jobs:
           fetch-depth: 1
       - uses: pnpm/action-setup@v4
         with:
-          package_json_file: work/cno-cli/package.json
+          version: 10.17.1
           run_install: false
       - uses: actions/setup-node@v4
         with:
