@@ -78,6 +78,11 @@ tokens and unknown conditional tokens are fatal. Zlib remains staged through
 curl's unconditional dependency. Any unsafe upstream dependency-shape drift
 aborts before `defconfig`.
 
+After `defconfig`, enabled curl features and their packages must still be
+selected. Disabled optional features may appear as `# CONFIG_* is not set` or
+may be absent when that OpenWrt release does not define the symbol; any
+`CONFIG_*=...` assignment for one of those disabled features is fatal.
+
 The Rust archive is only one half of OXC.  `Makefile` compiles and links the C
 binding with that SDK's `TARGET_CC`, `TARGET_CFLAGS`, and `TARGET_LDFLAGS`, so
 the module receives the same endianness, float ABI, and platform flags as cno.

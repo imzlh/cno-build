@@ -194,6 +194,25 @@ do
         "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" \
         || die "OpenWrt configuration must explicitly disable $disabled_option"
 done
+grep -Fq 'scripts/verify-openwrt-disabled-options.sh' \
+    "$CNO_BUILDS_ROOT/scripts/build-openwrt.sh" \
+    || die 'OpenWrt must verify that optional config symbols are disabled or absent'
+
+disabled_config_fixture=$(make_temp_dir)
+cat > "$disabled_config_fixture/.config" <<'EOF'
+# CONFIG_DEFINED_DISABLED is not set
+CONFIG_UNRELATED=y
+EOF
+sh "$CNO_BUILDS_ROOT/scripts/verify-openwrt-disabled-options.sh" \
+    "$disabled_config_fixture/.config" DEFINED_DISABLED ABSENT_DISABLED
+printf '%s\n' 'CONFIG_FORBIDDEN=y' >> "$disabled_config_fixture/.config"
+if sh "$CNO_BUILDS_ROOT/scripts/verify-openwrt-disabled-options.sh" \
+    "$disabled_config_fixture/.config" DEFINED_DISABLED ABSENT_DISABLED \
+    FORBIDDEN >/dev/null 2>&1; then
+    die 'OpenWrt disabled-option verifier accepted an assigned forbidden option'
+fi
+rm -rf -- "$disabled_config_fixture"
+
 grep -Fq 'name: Upload OpenWrt failure log' \
     "$CNO_BUILDS_ROOT/.github/workflows/packages.yml" \
     || die 'OpenWrt failures must preserve their complete logs'

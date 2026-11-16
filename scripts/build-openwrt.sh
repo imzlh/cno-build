@@ -309,21 +309,13 @@ for package_name in libcurl libopenssl libnghttp2 zlib; do
     grep -Eq "^CONFIG_PACKAGE_${package_name}=[my]$" "$sdk_dir/.config" \
         || die "SDK defconfig did not select $package_name"
 done
-for config_name in \
+sh "$CNO_BUILDS_ROOT/scripts/verify-openwrt-disabled-options.sh" \
+    "$sdk_dir/.config" \
     LIBCURL_WOLFSSL LIBCURL_GNUTLS LIBCURL_MBEDTLS LIBCURL_NOSSL \
     LIBCURL_ZSTD LIBCURL_THREADED_RESOLVER LIBCURL_LDAP \
-    LIBCURL_LIBIDN2 LIBCURL_SSH2 LIBCURL_HTTP3 LIBCURL_KERBEROS_AUTH
-do
-    grep -q "^# CONFIG_${config_name} is not set$" "$sdk_dir/.config" \
-        || die "SDK defconfig did not keep CONFIG_${config_name} disabled"
-done
-for config_name in \
+    LIBCURL_LIBIDN2 LIBCURL_SSH2 LIBCURL_HTTP3 LIBCURL_KERBEROS_AUTH \
     OPENSSL_WITH_COMPRESSION OPENSSL_ENGINE_BUILTIN_AFALG \
     OPENSSL_ENGINE_BUILTIN_DEVCRYPTO OPENSSL_ENGINE_BUILTIN_PADLOCK
-do
-    grep -q "^# CONFIG_${config_name} is not set$" "$sdk_dir/.config" \
-        || die "SDK defconfig did not keep CONFIG_${config_name} disabled"
-done
 
 actual_arch=$(sed -n 's/^CONFIG_TARGET_ARCH_PACKAGES=//p' "$sdk_dir/.config" | tr -d '"' | head -n 1)
 [ -n "$actual_arch" ] || die 'SDK .config has no CONFIG_TARGET_ARCH_PACKAGES'
